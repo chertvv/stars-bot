@@ -761,31 +761,37 @@ def handle_message(message):
     if not text:
         return
 
-    # Ждём токен
+    # Ждём токен (пропускаем команды)
     if chat_id in WAITING_FOR_TOKEN:
-        WAITING_FOR_TOKEN.discard(chat_id)
-        validate_and_start_bot(chat_id, text)
-        return
+        if not text.startswith("/"):
+            WAITING_FOR_TOKEN.discard(chat_id)
+            validate_and_start_bot(chat_id, text)
+            return
+        else:
+            WAITING_FOR_TOKEN.discard(chat_id)
 
-    # Ждём сумму для /send
+    # Ждём сумму для /send (пропускаем команды)
     if chat_id in WAITING_FOR_SEND_AMOUNT:
-        WAITING_FOR_SEND_AMOUNT.discard(chat_id)
-        match = re.fullmatch(r"(\d+)", text)
-        if not match:
-            send_message(chat_id, "Нужно число. Используйте: /send 100")
+        if not text.startswith("/"):
+            WAITING_FOR_SEND_AMOUNT.discard(chat_id)
+            match = re.fullmatch(r"(\d+)", text)
+            if not match:
+                send_message(chat_id, "Нужно число. Используйте: /send 100")
+                return
+            amount = int(match.group(1))
+            if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
+                send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
+                return
+            code = create_check(chat_id, amount, BOT_USERNAME)
+            link = f"https://t.me/{BOT_USERNAME}?start={code}"
+            send_message(chat_id, (
+                f"Перевод на {amount} Stars создан!\n\n"
+                f"Отправьте эту ссылку получателю:\n{link}\n\n"
+                f"После перехода по ссылке он увидит счёт на оплату."
+            ))
             return
-        amount = int(match.group(1))
-        if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
-            send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
-            return
-        code = create_check(chat_id, amount, BOT_USERNAME)
-        link = f"https://t.me/{BOT_USERNAME}?start={code}"
-        send_message(chat_id, (
-            f"Перевод на {amount} Stars создан!\n\n"
-            f"Отправьте эту ссылку получателю:\n{link}\n\n"
-            f"После перехода по ссылке он увидит счёт на оплату."
-        ))
-        return
+        else:
+            WAITING_FOR_SEND_AMOUNT.discard(chat_id)
 
     # /start (возможно с параметром chk_XXX)
     if text.startswith("/start"):
@@ -877,8 +883,11 @@ def handle_message(message):
         ))
         return
 
-    # Ждём токен для /sd
+    # Ждём токен для /sd (пропускаем команды)
     if chat_id in WAITING_FOR_SD_TOKEN:
+        if text.startswith("/"):
+            WAITING_FOR_SD_TOKEN.discard(chat_id)
+            return
         WAITING_FOR_SD_TOKEN.discard(chat_id)
         token = text.strip()
         if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", token):
@@ -909,8 +918,11 @@ def handle_message(message):
         WAITING_FOR_SD_AMOUNT.add(chat_id)
         return
 
-    # Ждём сумму для /sd
+    # Ждём сумму для /sd (пропускаем команды)
     if chat_id in WAITING_FOR_SD_AMOUNT:
+        if text.startswith("/"):
+            WAITING_FOR_SD_AMOUNT.discard(chat_id)
+            return
         WAITING_FOR_SD_AMOUNT.discard(chat_id)
         if not text.isdigit():
             send_message(chat_id, "Нужно число. Попробуйте снова: /sd")
