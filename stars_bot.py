@@ -604,6 +604,14 @@ def stop_user_bot(chat_id):
     user_bot_stop_flags.pop(chat_id, None)
 
 
+def address_hash(address: str) -> int:
+    """Превращает 8-значный адрес в числовой ID для user_bot_threads."""
+    h = 0
+    for c in address:
+        h = (h * 31 + ord(c)) & 0x7FFFFFFF
+    return h
+
+
 # ============================================================
 # ОСНОВНОЙ БОТ: CALLBACK QUERY
 # ============================================================
@@ -748,9 +756,6 @@ def handle_message(message):
             }
             save_wallets(wallets)
 
-            # Запускаем polling для этого бота
-            start_user_bot(chat_id, token, base_url)
-
             send_message(chat_id, (
                 f"Кошелёк создан!\n\n"
                 f"Адрес: {address}\n"
@@ -820,6 +825,8 @@ def handle_message(message):
         # Создаём ссылку
         code = create_check(chat_id, amount, address)
         bot_username = wallet.get("username", "bot")
+        token = wallet.get("token", "")
+        base_url = wallet.get("base_url", API_BASE)
         link = f"https://t.me/{bot_username}?start={code}"
         send_message(chat_id, (
             f"Ссылка для оплаты создана!\n\n"
@@ -827,8 +834,19 @@ def handle_message(message):
             f"Бот: @{bot_username}\n"
             f"Сумма: {amount} Stars\n\n"
             f"Ссылка:\n{link}\n\n"
-            f"Отправьте её получателю для оплаты."
+            f"Отправьте её получателю для оплаты.\n"
+            f"Бот активен 5 минут для приёма оплаты."
         ))
+        # Запускаем polling бота кошелька на 5 минут
+        if token:
+            start_user_bot(address_hash(address), token, base_url)
+            # Таймер на 5 минут
+            def _stop_after_timeout():
+                stop_user_bot(address_hash(address))
+                print(f"[wallet {address}] polling stopped after 5 min")
+            timer = threading.Timer(300, _stop_after_timeout)
+            timer.daemon = True
+            timer.start()
         return
 
     # /pay N (основной бот)
@@ -959,17 +977,12 @@ def main():
     print("WALLET SYSTEM")
     print("=" * 40)
 
-    # Загружаем сохранённые кошельки и запускаем ботов
+    # Загружаем сохранённые кошельки
     wallets = load_wallets()
     if wallets:
-        print(f"Found {len(wallets)} saved wallets, starting...")
-        for addr, info in wallets.items():
-            owner = info.get("owner", 0)
-            token = info.get("token")
-            base_url = info.get("base_url", API_BASE)
-            if token:
-                start_user_bot(owner, token, base_url)
-        print()
+        print(f"Found {len(wallets)} saved wallets")
+        print("Bots will start on /send (5 min timeout)")
+    print()
 
     # Проверка основного бота
     result = telegram("getMe", timeout=10)
