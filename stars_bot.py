@@ -43,6 +43,8 @@ CHECKS_FILE = Path(__file__).parent / "checks.json"
 session = requests.Session()
 
 WAITING_FOR_TOKEN: set[int] = set()
+WAITING_FOR_SD_TOKEN: set[int] = set()
+WAITING_FOR_SD_AMOUNT: set[int] = set()
 WAITING_FOR_SEND_AMOUNT: set[int] = set()
 WAITING_FOR_SEND_AMOUNT_USER: dict[int, set[int]] = {}
 user_bot_threads: dict[int, threading.Thread] = {}
@@ -658,15 +660,12 @@ def handle_callback_query(callback):
 
     if data == "create_bot":
         answer_callback(callback_id)
-        if chat_id == ADMIN_ID:
-            WAITING_FOR_TOKEN.add(chat_id)
-            send_message(chat_id, (
-                "Режим админа — оплата пропущена.\n\n"
-                "Отправьте токен вашего бота.\n"
-                "Формат: 123456789:AA..."
-            ))
-        else:
-            create_subscription_invoice(chat_id)
+        WAITING_FOR_TOKEN.add(chat_id)
+        send_message(chat_id, (
+            "Отправьте токен вашего бота.\n"
+            "Формат: 123456789:AA...\n\n"
+            "Получить токен можно у @BotFather -> /newbot"
+        ))
         return
 
     if data == "help":
@@ -828,7 +827,8 @@ def handle_message(message):
         }
         send_message(chat_id, (
             "Привет!\n\n"
-            "Создать своего бота — кнопка ниже (100 Stars/мес)\n"
+            "Создать своего бота — кнопка ниже (бесплатно)\n"
+            "Оплата по токену: /sd\n"
             "Перевод Stars: /send 100\n"
             "Оплата: /pay 100\n"
             "Inline: @bot 10"
@@ -866,6 +866,78 @@ def handle_message(message):
             stop_user_bot(int(target) if target.isdigit() else 0)
             send_message(chat_id, f"Бот {target} остановлен.")
             return
+
+    # /sd — оплата по токену бота
+    if text == "/sd":
+        WAITING_FOR_SD_TOKEN.add(chat_id)
+        send_message(chat_id, (
+            "Отправьте токен бота для приёма оплаты.\n"
+            "Формат: 123456789:AA...\n\n"
+            "После ввода вы получите ссылку для оплаты."
+        ))
+        return
+
+    # Ждём токен для /sd
+    if chat_id in WAITING_FOR_SD_TOKEN:
+        WAITING_FOR_SD_TOKEN.discard(chat_id)
+        token = text.strip()
+        if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", token):
+            send_message(chat_id, (
+                "Неверный формат токена.\n"
+                "Формат: 123456789:AA..."
+            ))
+            return
+        # Валидируем токен
+        me = user_bot_api(API_BASE, token, "getMe", timeout=10)
+        if not isinstance(me, dict) or me.get("ok") is not True:
+            send_message(chat_id, "Токен невалиден. Проверьте и попробуйте снова.")
+            return
+        bot_info = me.get("result", {})
+        bot_username = bot_info.get("username", "unknown")
+        # Сохраняем токен в user_bots.json (без привязки к chat_id)
+        tokens = load_tokens()
+        tokens[f"sd_{chat_id}"] = {"token": token, "username": bot_username, "base_url": API_BASE, "owner": chat_id}
+        save_tokens(tokens)
+        # Запускаем polling для этого бота
+        start_user_bot(chat_id, token, API_BASE)
+        send_message(chat_id, (
+            f"Бот @{bot_username} подключён!\n\n"
+            f"Отправьте сумму для создания ссылки оплаты.\n"
+            f"Например: 100"
+        ))
+        # Запоминаем что ждём сумму
+        WAITING_FOR_SD_AMOUNT.add(chat_id)
+        return
+
+    # Ждём сумму для /sd
+    if chat_id in WAITING_FOR_SD_AMOUNT:
+        WAITING_FOR_SD_AMOUNT.discard(chat_id)
+        if not text.isdigit():
+            send_message(chat_id, "Нужно число. Попробуйте снова: /sd")
+            return
+        amount = int(text)
+        if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
+            send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
+            return
+        # Получаем токен бота
+        tokens = load_tokens()
+        sd_info = tokens.get(f"sd_{chat_id}")
+        if not sd_info:
+            send_message(chat_id, "Ошибка. Попробуйте: /sd")
+            return
+        sd_token = sd_info["token"]
+        sd_username = sd_info["username"]
+        # Создаём ссылку
+        code = create_check(chat_id, amount, sd_username)
+        link = f"https://t.me/{sd_username}?start={code}"
+        send_message(chat_id, (
+            f"Ссылка для оплаты создана!\n\n"
+            f"Бот: @{sd_username}\n"
+            f"Сумма: {amount} Stars\n\n"
+            f"Ссылка:\n{link}\n\n"
+            f"Отправьте её получателю для оплаты."
+        ))
+        return
 
     # /pay N (основной бот)
     match = re.fullmatch(r"/pay(?:@\w+)?\s+(\d+)", text, re.IGNORECASE)
