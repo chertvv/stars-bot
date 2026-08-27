@@ -659,7 +659,8 @@ def handle_callback_query(callback):
                 "  /wallets — список кошельков\n"
                 "  /us АДРЕС ИМЯ — задать имя\n"
                 "  /del АДРЕС — удалить\n"
-                "  /find @username — найти"
+                "  /find @username — найти\n"
+                "  /find 123456789 — найти по ID"
             )
         send_message(chat_id, msg)
         return
@@ -949,18 +950,31 @@ def handle_message(message):
             send_message(chat_id, f"Кошелёк {address} удалён.")
             return
 
-        # /find @username — найти кошелёк по боту
-        match_find = re.fullmatch(r"/find\s+@(\w+)", text, re.IGNORECASE)
+        # /find @username или /find ID — найти кошелёк
+        match_find = re.fullmatch(r"/find\s+(@\w+|\d+)", text, re.IGNORECASE)
         if match_find:
-            target = match_find.group(1).lower()
+            target = match_find.group(1)
             wallets = load_wallets()
-            for addr, info in wallets.items():
-                if info.get("username", "").lower() == target:
-                    name = info.get("name", "")
-                    name_str = f" [{name}]" if name else ""
-                    send_message(chat_id, f"@{target} -> {addr}{name_str} (owner: {info.get('owner', '?')})")
-                    return
-            send_message(chat_id, f"Кошелёк для @{target} не найден.")
+            if target.startswith("@"):
+                target = target[1:].lower()
+                for addr, info in wallets.items():
+                    if info.get("username", "").lower() == target:
+                        name = info.get("name", "")
+                        name_str = f" [{name}]" if name else ""
+                        send_message(chat_id, f"@{target} -> {addr}{name_str} (owner: {info.get('owner', '?')})")
+                        return
+                send_message(chat_id, f"Кошелёк для @{target} не найден.")
+            else:
+                target_id = int(target)
+                found = False
+                for addr, info in wallets.items():
+                    if info.get("owner") == target_id:
+                        name = info.get("name", "")
+                        name_str = f" [{name}]" if name else ""
+                        send_message(chat_id, f"ID {target_id} -> {addr}{name_str} @{info.get('username', '?')}")
+                        found = True
+                if not found:
+                    send_message(chat_id, f"Кошелёк для ID {target_id} не найден.")
             return
 
 
