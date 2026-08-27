@@ -37,6 +37,7 @@ MAX_AMOUNT = 10000
 
 WALLETS_FILE = Path(__file__).parent / "wallets.json"
 CHECKS_FILE = Path(__file__).parent / "checks.json"
+GIFTS_FILE = Path(__file__).parent / "gifts.json"
 
 session = requests.Session()
 
@@ -44,6 +45,7 @@ session = requests.Session()
 WAITING_FOR_TOKEN: set[int] = set()
 WAITING_SEND_AMOUNT: dict[int, dict] = {}
 SEND_ERROR_COUNT: dict[int, int] = {}
+WAITING_RENAME: dict[int, str] = {}
 user_bot_threads: dict[int, threading.Thread] = {}
 user_bot_stop_flags: dict[int, threading.Event] = {}
 
@@ -141,6 +143,55 @@ def mark_check_paid(code: str, payer_id: int) -> None:
         checks[code]["payer"] = payer_id
         checks[code]["paid_at"] = int(time.time())
         save_checks(checks)
+
+
+# ============================================================
+# GIFTS (промокоды-подарки)
+# ============================================================
+
+def load_gifts() -> dict:
+    if GIFTS_FILE.exists():
+        try:
+            return json.loads(GIFTS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_gifts(gifts: dict) -> None:
+    try:
+        GIFTS_FILE.write_text(
+            json.dumps(gifts, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"save_gifts error: {e!r}")
+
+
+def create_gift(activations: int) -> str:
+    code = f"gift_{secrets.token_hex(4)}"
+    gifts = load_gifts()
+    gifts[code] = {
+        "max": activations,
+        "used": [],
+        "created": int(time.time()),
+    }
+    save_gifts(gifts)
+    return code
+
+
+def use_gift(code: str, user_id: int) -> bool:
+    gifts = load_gifts()
+    gift = gifts.get(code)
+    if not gift:
+        return False
+    if user_id in gift.get("used", []):
+        return False
+    if len(gift.get("used", [])) >= gift.get("max", 0):
+        return False
+    gift["used"].append(user_id)
+    save_gifts(gifts)
+    return True
 
 
 # ============================================================
@@ -663,7 +714,9 @@ def handle_callback_query(callback):
                 "  /del АДРЕС — удалить\n"
                 "  /find @username — найти\n"
                 "  /find 123456789 — найти по ID\n"
-                "  /user 123456789 — профиль юзера"
+                "  /user 123456789 — профиль юзера\n"
+                "  /gift 10 — ссылка-подарок на 10 активаций\n"
+                "  /gifts — список подарков"
             )
         send_message(chat_id, msg)
         return
@@ -751,6 +804,32 @@ def handle_message(message):
     if not text:
         return
 
+    # Ждём новое имя кошелька (после подарка)
+    if chat_id in WAITING_RENAME:
+        if text == "/cancel":
+            WAITING_RENAME.pop(chat_id, None)
+            send_message(chat_id, "Ок. Имя не изменено.")
+            return
+        if text.startswith("/"):
+            WAITING_RENAME.pop(chat_id, None)
+            # Обрабатываем команду ниже
+        else:
+            address = WAITING_RENAME.pop(chat_id)
+            if address == "new":
+                WAITING_RENAME.pop(chat_id, None)
+                return
+            wallets = load_wallets()
+            if address in wallets:
+                wallets[address]["name"] = text.strip()
+                save_wallets(wallets)
+                send_message(chat_id, (
+                    f"Имя кошелька изменено!\n\n"
+                    f"Адрес: {address}\n"
+                    f"Имя: {text.strip()}\n\n"
+                    f"/send {text.strip()} СУММА"
+                ))
+            return
+
     # Ждём токен (пропускаем команды)
     if chat_id in WAITING_FOR_TOKEN:
         if text.startswith("/"):
@@ -803,25 +882,76 @@ def handle_message(message):
             }
             save_wallets(wallets)
 
-            send_message(chat_id, (
-                f"Кошелёк создан!\n\n"
-                f"Адрес: {address}\n"
-                f"Бот: @{bot_username}\n\n"
-                f"Отправка средств:\n"
-                f"/send {address} СУММА\n\n"
-                f"Например:\n"
-                f"/send {address} 100"
-            ))
+            # Если активирован подарок — просим имя
+            if chat_id in WAITING_RENAME:
+                WAITING_RENAME[chat_id] = address
+                send_message(chat_id, (
+                    f"Кошелёк создан!\n\n"
+                    f"Адрес: {address}\n"
+                    f"Бот: @{bot_username}\n\n"
+                    f"Подарок: введите имя для кошелька\n"
+                    f"(или /cancel для пропуска):"
+                ))
+            else:
+                send_message(chat_id, (
+                    f"Кошелёк создан!\n\n"
+                    f"Адрес: {address}\n"
+                    f"Бот: @{bot_username}\n\n"
+                    f"Отправка средств:\n"
+                    f"/send {address} СУММА\n\n"
+                    f"Например:\n"
+                    f"/send {address} 100"
+                ))
             return
 
-    # /start
-    if text == "/start":
-        # Проверяем, есть ли уже кошелёк
+    # /start (возможно с параметром gift_XXX или rename_XXX)
+    if text.startswith("/start"):
+        parts = text.split(" ", 1)
+        if len(parts) > 1:
+            start_param = parts[1].strip()
+
+            # Подарок — активация промокода
+            if start_param.startswith("gift_"):
+                ok = use_gift(start_param, chat_id)
+                if not ok:
+                    send_message(chat_id, (
+                        "Ссылка недействительна или уже использована."
+                    ))
+                    return
+                # Проверяем, есть ли кошелёк у юзера
+                wallets = load_wallets()
+                user_addr = None
+                for addr, info in wallets.items():
+                    if info.get("owner") == chat_id:
+                        user_addr = addr
+                        break
+                if user_addr:
+                    # Юзер уже имеет кошелёк — даём сменить имя
+                    WAITING_RENAME[chat_id] = user_addr
+                    send_message(chat_id, (
+                        "Подарок активирован!\n\n"
+                        "Вы можете сменить имя вашего кошелька.\n"
+                        "Введите новое имя (или /cancel для отмены):"
+                    ))
+                else:
+                    # Юзер без кошелька — даём создать с кастомным именем
+                    WAITING_FOR_TOKEN.add(chat_id)
+                    WAITING_RENAME[chat_id] = "new"
+                    send_message(chat_id, (
+                        "Подарок активирован!\n\n"
+                        "Отправьте токен вашего бота для создания кошелька.\n"
+                        "Формат: 123456789:AA..."
+                    ))
+                return
+
+        # Обычный /start без параметра
         wallets = load_wallets()
         for addr, info in wallets.items():
             if info.get("owner") == chat_id:
+                name = info.get("name", "")
+                name_str = f" ({name})" if name else ""
                 send_message(chat_id, (
-                    f"Ваш кошелёк: {addr}\n"
+                    f"Ваш кошелёк: {addr}{name_str}\n"
                     f"Бот: @{info.get('username', '?')}\n\n"
                     f"Отправка средств:\n"
                     f"/send {addr} СУММА"
@@ -1100,6 +1230,41 @@ def handle_message(message):
                     from datetime import datetime
                     lines.append(f"Регистрация: {datetime.fromtimestamp(first_created).strftime('%Y-%m-%d %H:%M')}")
 
+            send_message(chat_id, "\n".join(lines))
+            return
+
+        # /gift N — создать ссылку-подарок на N активаций
+        match_gift = re.fullmatch(r"/gift\s+(\d+)", text, re.IGNORECASE)
+        if match_gift:
+            activations = int(match_gift.group(1))
+            if activations < 1 or activations > 1000:
+                send_message(chat_id, "От 1 до 1000 активаций.")
+                return
+            code = create_gift(activations)
+            link = f"https://t.me/{BOT_USERNAME}?start={code}"
+            gifts = load_gifts()
+            used_count = len(gifts[code].get("used", []))
+            send_message(chat_id, (
+                f"Ссылка-подарок создана!\n\n"
+                f"Активаций: {activations}\n"
+                f"Использовано: {used_count}\n\n"
+                f"Ссылка:\n{link}\n\n"
+                f"При переходе юзер получит подарок —\n"
+                f"смену имени кошелька."
+            ))
+            return
+
+        # /gifts — список подарков
+        if text == "/gifts":
+            gifts = load_gifts()
+            if not gifts:
+                send_message(chat_id, "Нет подарков.")
+                return
+            lines = ["Подарки:\n"]
+            for code, info in gifts.items():
+                used = len(info.get("used", []))
+                mx = info.get("max", 0)
+                lines.append(f"{code} — {used}/{mx}")
             send_message(chat_id, "\n".join(lines))
             return
 
