@@ -42,6 +42,8 @@ session = requests.Session()
 
 # Состояния
 WAITING_FOR_TOKEN: set[int] = set()
+WAITING_SEND_AMOUNT: dict[int, dict] = {}
+SEND_ERROR_COUNT: dict[int, int] = {}
 user_bot_threads: dict[int, threading.Thread] = {}
 user_bot_stop_flags: dict[int, threading.Event] = {}
 
@@ -701,6 +703,37 @@ def handle_successful_payment(message):
 # ОСНОВНОЙ БОТ: MESSAGE
 # ============================================================
 
+def _create_send_link(chat_id, address, amount):
+    """Создаёт ссылку для оплаты и запускает бота кошелька на 5 мин."""
+    wallets = load_wallets()
+    wallet = wallets.get(address)
+    if not wallet:
+        send_message(chat_id, f"Кошелёк {address} не найден.")
+        return
+    code = create_check(chat_id, amount, address)
+    bot_username = wallet.get("username", "bot")
+    token = wallet.get("token", "")
+    base_url = wallet.get("base_url", API_BASE)
+    link = f"https://t.me/{bot_username}?start={code}"
+    send_message(chat_id, (
+        f"Ссылка для оплаты создана!\n\n"
+        f"Кошелёк: {address}\n"
+        f"Бот: @{bot_username}\n"
+        f"Сумма: {amount} Stars\n\n"
+        f"Ссылка:\n{link}\n\n"
+        f"Отправьте её получателю для оплаты.\n"
+        f"Бот активен 5 минут для приёма оплаты."
+    ))
+    if token:
+        start_user_bot(address_hash(address), token, base_url)
+        def _stop_after_timeout():
+            stop_user_bot(address_hash(address))
+            print(f"[wallet {address}] polling stopped after 5 min")
+        timer = threading.Timer(300, _stop_after_timeout)
+        timer.daemon = True
+        timer.start()
+
+
 def handle_message(message):
     if not isinstance(message, dict):
         return
@@ -825,16 +858,45 @@ def handle_message(message):
         send_message(chat_id, "У вас нет кошелька. Создайте: /start")
         return
 
-    # /send АДРЕС_или_ИМЯ СУММА
-    match = re.fullmatch(r"/send(?:@\w+)?\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
+    # Ждём сумму для /send (после /send АДРЕС без суммы)
+    if chat_id in WAITING_SEND_AMOUNT:
+        if text.startswith("/"):
+            WAITING_SEND_AMOUNT.pop(chat_id, None)
+            SEND_ERROR_COUNT.pop(chat_id, None)
+            # Обрабатываем команду ниже
+        else:
+            if not text.isdigit():
+                SEND_ERROR_COUNT[chat_id] = SEND_ERROR_COUNT.get(chat_id, 0) + 1
+                if SEND_ERROR_COUNT[chat_id] >= 2:
+                    WAITING_SEND_AMOUNT.pop(chat_id, None)
+                    SEND_ERROR_COUNT.pop(chat_id, None)
+                    send_message(chat_id, "Слишком много ошибок. Начните заново: /send АДРЕС СУММА")
+                else:
+                    send_message(chat_id, "Введите число — сумму в Stars:")
+                return
+            amount = int(text)
+            if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
+                SEND_ERROR_COUNT[chat_id] = SEND_ERROR_COUNT.get(chat_id, 0) + 1
+                if SEND_ERROR_COUNT[chat_id] >= 2:
+                    WAITING_SEND_AMOUNT.pop(chat_id, None)
+                    SEND_ERROR_COUNT.pop(chat_id, None)
+                    send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT}. Начните заново: /send АДРЕС СУММА")
+                else:
+                    send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars. Попробуйте снова:")
+                return
+            # Успех — создаём ссылку
+            info = WAITING_SEND_AMOUNT.pop(chat_id)
+            SEND_ERROR_COUNT.pop(chat_id, None)
+            address = info["address"]
+            _create_send_link(chat_id, address, amount)
+            return
+
+    # /send АДРЕС_или_ИМЯ [СУММА]
+    match = re.fullmatch(r"/send(?:@\w+)?\s+(\S+)(?:\s+(\d+))?", text, re.IGNORECASE)
     if match:
         target = match.group(1).lower()
-        amount = int(match.group(2))
-        if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
-            send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
-            return
+        amount_str = match.group(2)
         wallets = load_wallets()
-        # Ищем по адресу или по имени
         wallet = wallets.get(target)
         address = target
         if not wallet:
@@ -846,31 +908,16 @@ def handle_message(message):
         if not wallet:
             send_message(chat_id, f"Кошелёк {target} не найден.")
             return
-        # Создаём ссылку
-        code = create_check(chat_id, amount, address)
-        bot_username = wallet.get("username", "bot")
-        token = wallet.get("token", "")
-        base_url = wallet.get("base_url", API_BASE)
-        link = f"https://t.me/{bot_username}?start={code}"
-        send_message(chat_id, (
-            f"Ссылка для оплаты создана!\n\n"
-            f"Кошелёк: {address}\n"
-            f"Бот: @{bot_username}\n"
-            f"Сумма: {amount} Stars\n\n"
-            f"Ссылка:\n{link}\n\n"
-            f"Отправьте её получателю для оплаты.\n"
-            f"Бот активен 5 минут для приёма оплаты."
-        ))
-        # Запускаем polling бота кошелька на 5 минут
-        if token:
-            start_user_bot(address_hash(address), token, base_url)
-            # Таймер на 5 минут
-            def _stop_after_timeout():
-                stop_user_bot(address_hash(address))
-                print(f"[wallet {address}] polling stopped after 5 min")
-            timer = threading.Timer(300, _stop_after_timeout)
-            timer.daemon = True
-            timer.start()
+        if amount_str:
+            amount = int(amount_str)
+            if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
+                send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
+                return
+            _create_send_link(chat_id, address, amount)
+        else:
+            WAITING_SEND_AMOUNT[chat_id] = {"address": address}
+            SEND_ERROR_COUNT[chat_id] = 0
+            send_message(chat_id, "Введите сумму в Stars (число):")
         return
 
     # /pay N (основной бот)
