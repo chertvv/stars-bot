@@ -168,7 +168,7 @@ def save_gifts(gifts: dict) -> None:
         print(f"save_gifts error: {e!r}")
 
 
-def create_gift(activations: int, item: str = "", amount: int = 0, rename: bool = False) -> str:
+def create_gift(activations: int, item: str = "", amount: int = 0, rename: bool = False, gift_id: str = "") -> str:
     code = f"gift_{secrets.token_hex(4)}"
     gifts = load_gifts()
     gifts[code] = {
@@ -177,6 +177,7 @@ def create_gift(activations: int, item: str = "", amount: int = 0, rename: bool 
         "item": item,
         "amount": amount,
         "rename": rename,
+        "gift_id": gift_id,
         "created": int(time.time()),
     }
     save_gifts(gifts)
@@ -196,6 +197,39 @@ def use_gift(code: str, user_id: int) -> dict | None:
     gift["used"].append(user_id)
     save_gifts(gifts)
     return gift
+
+
+# ============================================================
+# TELEGRAM GIFTS CATALOG
+# ============================================================
+
+GIFTS_CATALOG = {
+    "trophy":       {"id": "5168043875654172773", "title": "🏆 Трофей",           "stars": 100},
+    "rose":         {"id": "5168103777563050263", "title": "🌹 Роза",             "stars": 25},
+    "cake":         {"id": "5170144170496491616", "title": "🎂 Торт",             "stars": 50},
+    "heart":        {"id": "5170145012310081615", "title": "💝 Сердце",           "stars": 15},
+    "sock":         {"id": "5170233102089322756", "title": "🧦 Носок",             "stars": 15},
+    "gift":         {"id": "5170250947678437525", "title": "🎁 Подарок",          "stars": 25},
+    "bouquet":      {"id": "5170314324215857265", "title": "💐 Букет",            "stars": 50},
+    "diamond":      {"id": "5170521118301225164", "title": "💎 Бриллиант",       "stars": 100},
+    "rocket":       {"id": "5170564780938756245", "title": "🚀 Ракета",          "stars": 50},
+    "ring":         {"id": "5170690322832818290", "title": "💍 Кольцо",           "stars": 100},
+    "ball":         {"id": "6028601630662853006", "title": "🎾 Мяч",              "stars": 50},
+    "bear":         {"id": "6046178578163303744", "title": "🐻 Медведь",         "stars": 50},
+    "snoop":        {"id": "6014591077976114307", "title": "🎤 Snoop Dogg",      "stars": 200},
+    "cupid":        {"id": "5868561433997870501", "title": "💘 Cupid Charm",     "stars": 500},
+    "santa":        {"id": "5983471780763796287", "title": "🎅 Santa Hat",       "stars": 50},
+    "sparkler":     {"id": "6003643167683903930", "title": "✨ Party Sparkler",  "stars": 15},
+}
+
+
+def send_tg_gift(token: str, user_id: int, gift_id: str) -> bool:
+    """Отправляет Telegram Gift через API."""
+    result = user_bot_api(API_BASE, token, "sendGift", {
+        "user_id": user_id,
+        "gift_id": gift_id,
+    }, timeout=15)
+    return isinstance(result, dict) and result.get("ok") is True
 
 
 # ============================================================
@@ -719,10 +753,11 @@ def handle_callback_query(callback):
                 "  /find @username — найти\n"
                 "  /find 123456789 — найти по ID\n"
                 "  /user 123456789 — профиль юзера\n"
-                "  /gift 10 — подарок (rename) на 10 юзеров\n"
-                "  /gift bear 10 — 10 медведей\n"
+                "  /gift list — каталог подарков\n"
+                "  /gift bear 10 — 10 медведей (TG Gift)\n"
                 "  /gift bear us 10 — 10 медведей + rename\n"
-                "  /gifts — список подарков"
+                "  /gift rose us 5 — 5 роз + rename\n"
+                "  /gifts — список созданных"
             )
         send_message(chat_id, msg)
         return
@@ -927,13 +962,25 @@ def handle_message(message):
                 item = gift_info.get("item", "")
                 amount = gift_info.get("amount", 0)
                 rename = gift_info.get("rename", False)
+                tg_gift_id = gift_info.get("gift_id", "")
+
+                # Отправляем реальный Telegram Gift если есть gift_id
+                gift_sent = False
+                if tg_gift_id:
+                    gift_sent = send_tg_gift(BOT_TOKEN, chat_id, tg_gift_id)
 
                 # Формируем сообщение о подарке
-                gift_lines = ["Подарок активирован!\n"]
-                if item and amount:
-                    gift_lines.append(f"Предмет: {item} x{amount}")
+                gift_lines = ["🎁 Подарок активирован!\n"]
+                if item:
+                    cat = GIFTS_CATALOG.get(item, {})
+                    title = cat.get("title", item)
+                    gift_lines.append(f"Предмет: {title}")
+                if gift_sent:
+                    gift_lines.append("✅ Telegram Gift отправлен вам!")
+                elif tg_gift_id:
+                    gift_lines.append("⚠️ Не удалось отправить Gift")
                 if rename:
-                    gift_lines.append("Бонус: смена имени кошелька")
+                    gift_lines.append("✨ Бонус: смена имени кошелька")
 
                 wallets = load_wallets()
                 user_addr = None
@@ -1249,48 +1296,77 @@ def handle_message(message):
         # /gift [ТИП] [us] N — создать ссылку-подарок
         # Форматы:
         #   /gift 10              — 10 активаций (только rename)
-        #   /gift bear 10         — 10 "bear" (предмет)
-        #   /gift bear us 10      — 10 "bear" + rename
-        #   /gift us 10           — 10 rename
+        #   /gift bear 10         — 10 медведей (реальный TG Gift)
+        #   /gift bear us 10      — 10 медведей + rename
+        #   /gift rose us 5       — 5 роз + rename
+        #   /gift list            — каталог подарков
         match_gift_rename = re.fullmatch(r"/gift\s+(\S+)\s+us\s+(\d+)", text, re.IGNORECASE)
         match_gift_item = re.fullmatch(r"/gift\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
         match_gift_plain = re.fullmatch(r"/gift\s+(\d+)", text, re.IGNORECASE)
+
+        # /gift list — показать каталог
+        if re.fullmatch(r"/gift\s+list", text, re.IGNORECASE):
+            lines = ["Каталог подарков:\n"]
+            for key, info in GIFTS_CATALOG.items():
+                lines.append(f"  {key} — {info['title']} ({info['stars']} Stars)")
+            lines.append("\nИспользование:")
+            lines.append("  /gift bear 10 — 10 медведей")
+            lines.append("  /gift bear us 10 — 10 медведей + rename")
+            send_message(chat_id, "\n".join(lines))
+            return
 
         gift_item = ""
         gift_amount = 0
         gift_rename = False
         gift_activations = 0
+        gift_id = ""
+        matched = False
 
         if match_gift_rename:
             gift_item = match_gift_rename.group(1).lower()
-            gift_amount = int(match_gift_rename.group(1))  # не используется
             gift_activations = int(match_gift_rename.group(2))
             gift_rename = True
-            gift_amount = 1  # 1 предмет
+            gift_amount = 1
+            matched = True
         elif match_gift_item and not match_gift_item.group(1).isdigit():
             gift_item = match_gift_item.group(1).lower()
             gift_activations = int(match_gift_item.group(2))
             gift_amount = 1
+            matched = True
         elif match_gift_plain:
             gift_activations = int(match_gift_plain.group(1))
             gift_rename = True
+            matched = True
 
-        if match_gift_rename or (match_gift_item and not match_gift_item.group(1).isdigit()) or match_gift_plain:
+        if matched:
+            # Проверяем предмет по каталогу
+            if gift_item:
+                cat = GIFTS_CATALOG.get(gift_item)
+                if not cat:
+                    available = ", ".join(GIFTS_CATALOG.keys())
+                    send_message(chat_id, f"Предмет не найден: {gift_item}\n\nДоступные: {available}")
+                    return
+                gift_id = cat["id"]
+
             if gift_activations < 1 or gift_activations > 1000:
                 send_message(chat_id, "От 1 до 1000 активаций.")
                 return
-            code = create_gift(gift_activations, gift_item, gift_amount, gift_rename)
+
+            code = create_gift(gift_activations, gift_item, gift_amount, gift_rename, gift_id)
             link = f"https://t.me/{BOT_USERNAME}?start={code}"
             gifts = load_gifts()
             used_count = len(gifts[code].get("used", []))
+
             desc_parts = []
             if gift_item:
-                desc_parts.append(f"Предмет: {gift_item}")
+                cat = GIFTS_CATALOG.get(gift_item, {})
+                desc_parts.append(f"🎁 {cat.get('title', gift_item)} ({cat.get('stars', '?')} Stars)")
             if gift_rename:
-                desc_parts.append("Бонус: rename")
+                desc_parts.append("✨ Rename")
             if not desc_parts:
-                desc_parts.append("Rename")
+                desc_parts.append("✨ Rename")
             desc = "\n".join(desc_parts)
+
             send_message(chat_id, (
                 f"Ссылка-подарок создана!\n\n"
                 f"{desc}\n"
@@ -1300,7 +1376,7 @@ def handle_message(message):
             ))
             return
 
-        # /gifts — список подарков
+        # /gifts — список созданных подарков
         if text == "/gifts":
             gifts = load_gifts()
             if not gifts:
@@ -1314,7 +1390,8 @@ def handle_message(message):
                 rename = info.get("rename", False)
                 tags = []
                 if item:
-                    tags.append(item)
+                    cat = GIFTS_CATALOG.get(item, {})
+                    tags.append(cat.get("title", item))
                 if rename:
                     tags.append("rename")
                 tag_str = f" [{', '.join(tags)}]" if tags else ""
