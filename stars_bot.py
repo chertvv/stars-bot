@@ -875,7 +875,7 @@ def _create_send_link(chat_id, address, amount):
     base_url = wallet.get("base_url", API_BASE)
     name = wallet.get("name", "")
     display = f"{name} ({address})" if name else address
-    link = f"https://t.me/{bot_username}?start={code}"
+    link = f"https://t.me/kise?start={code}"
     send_message(chat_id, (
         f"Ссылка для оплаты создана!\n\n"
         f"Кошелёк: {display}\n"
@@ -1023,11 +1023,46 @@ def handle_message(message):
                 ))
             return
 
-    # /start (возможно с параметром gift_XXX или rename_XXX)
+    # /start (возможно с параметром gift_XXX, pay_XXX)
     if text.startswith("/start"):
         parts = text.split(" ", 1)
         if len(parts) > 1:
             start_param = parts[1].strip()
+
+            # Оплата по ссылке (через основного бота, invoice через бота кошелька)
+            if start_param.startswith("pay_"):
+                check = get_check(start_param)
+                if check is None:
+                    send_message(chat_id, "Ссылка недействительна.")
+                    return
+                if check.get("paid"):
+                    send_message(chat_id, "Эта ссылка уже использована.")
+                    return
+                amount = check["amount"]
+                wallet_addr = check.get("wallet", "")
+                wallets = load_wallets()
+                wallet = wallets.get(wallet_addr)
+                if not wallet:
+                    send_message(chat_id, "Кошелёк не найден.")
+                    return
+                wallet_token = wallet.get("token", "")
+                wallet_base = wallet.get("base_url", API_BASE)
+                wallet_bot = wallet.get("username", "bot")
+                name = wallet.get("name", "")
+                display = f"{name} ({wallet_addr})" if name else wallet_addr
+                # Отправляем invoice через бота кошелька
+                result = user_bot_api(wallet_base, wallet_token, "sendInvoice", {
+                    "chat_id": chat_id,
+                    "title": f"Оплата {amount} Stars",
+                    "description": f"Перевод на кошелёк {display}",
+                    "payload": start_param,
+                    "currency": "XTR",
+                    "prices": [{"label": f"{amount} Stars", "amount": amount}],
+                })
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
+                    send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+                return
 
             # Подарок — активация промокода
             if start_param.startswith("gift_"):
@@ -1482,7 +1517,7 @@ def handle_message(message):
                 return
 
             code = create_gift(gift_activations, gift_item, gift_amount, gift_rename, gift_id)
-            link = f"https://t.me/{BOT_USERNAME}?start={code}"
+            link = f"https://t.me/kise?start={code}"
             gifts = load_gifts()
             used_count = len(gifts[code].get("used", []))
 
