@@ -873,10 +873,12 @@ def _create_send_link(chat_id, address, amount):
     bot_username = wallet.get("username", "bot")
     token = wallet.get("token", "")
     base_url = wallet.get("base_url", API_BASE)
+    name = wallet.get("name", "")
+    display = f"{name} ({address})" if name else address
     link = f"https://t.me/{bot_username}?start={code}"
     send_message(chat_id, (
         f"Ссылка для оплаты создана!\n\n"
-        f"Кошелёк: {address}\n"
+        f"Кошелёк: {display}\n"
         f"Бот: @{bot_username}\n"
         f"Сумма: {amount} Stars\n\n"
         f"Ссылка:\n{link}\n\n"
