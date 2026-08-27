@@ -660,7 +660,8 @@ def handle_callback_query(callback):
                 "  /us АДРЕС ИМЯ — задать имя\n"
                 "  /del АДРЕС — удалить\n"
                 "  /find @username — найти\n"
-                "  /find 123456789 — найти по ID"
+                "  /find 123456789 — найти по ID\n"
+                "  /user 123456789 — профиль юзера"
             )
         send_message(chat_id, msg)
         return
@@ -975,6 +976,51 @@ def handle_message(message):
                         found = True
                 if not found:
                     send_message(chat_id, f"Кошелёк для ID {target_id} не найден.")
+            return
+
+        # /user ID — профиль пользователя
+        match_user = re.fullmatch(r"/user\s+(\d+)", text, re.IGNORECASE)
+        if match_user:
+            target_id = int(match_user.group(1))
+            wallets = load_wallets()
+            checks = load_checks()
+
+            # Кошельки пользователя
+            user_wallets = []
+            for addr, info in wallets.items():
+                if info.get("owner") == target_id:
+                    user_wallets.append((addr, info))
+
+            # Оплаты, где пользователь — плательщик
+            as_payer = [c for c in checks.values() if c.get("payer") == target_id]
+            # Оплаты, где пользователь — получатель (владелец кошелька)
+            user_addrs = {a for a, _ in user_wallets}
+            as_receiver = [c for c in checks.values() if c.get("wallet") in user_addrs and c.get("paid")]
+
+            paid_as_payer = sum(c.get("amount", 0) for c in as_payer if c.get("paid"))
+            paid_as_receiver = sum(c.get("amount", 0) for c in as_receiver)
+
+            lines = [f"Профиль пользователя {target_id}\n"]
+
+            if user_wallets:
+                lines.append("Кошельки:")
+                for addr, info in user_wallets:
+                    name = info.get("name", "")
+                    name_str = f" [{name}]" if name else ""
+                    lines.append(f"  {addr}{name_str} @{info.get('username', '?')}")
+            else:
+                lines.append("Кошельков: 0")
+
+            lines.append(f"\nОтправлено оплат: {len(as_payer)} ({paid_as_payer} Stars)")
+            lines.append(f"Получено оплат: {len(as_receiver)} ({paid_as_receiver} Stars)")
+
+            if user_wallets:
+                first_created = min(info.get("created", 0) for _, info in user_wallets)
+                if first_created:
+                    from datetime import datetime
+                    lines.append(f"Регистрация: {datetime.fromtimestamp(first_created).strftime('%Y-%m-%d %H:%M')}")
+
+            send_message(chat_id, "\n".join(lines))
             return
 
 
