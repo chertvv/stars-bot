@@ -202,8 +202,17 @@ def create_subscription_invoice(chat_id):
 # ПОЛЬЗОВАТЕЛЬСКИЙ БОТ: INVOICE
 # ============================================================
 
+def find_bot_owner(token):
+    """Находит chat_id владельца бота по токену."""
+    tokens = load_tokens()
+    for chat_id_str, info in tokens.items():
+        if info.get("token") == token:
+            return int(chat_id_str)
+    return None
+
+
 def user_bot_send_invoice(base_url, token, chat_id, amount):
-    payload = f"stars_{chat_id}_{amount}_{int(time.time())}"
+    payload = f"stars_{chat_id}_{amount}"
     return user_bot_api(base_url, token, "sendInvoice", {
         "chat_id": chat_id,
         "title": "Оплата Stars",
@@ -222,7 +231,7 @@ def user_bot_answer_inline(base_url, token, inline_query, amount):
         return None
     user = inline_query.get("from") or {}
     user_id = user.get("id", 0)
-    payload = f"inline_{user_id}_{amount}_{uuid.uuid4().hex}"
+    payload = f"inline_{user_id}_{amount}"
 
     result = {
         "type": "article",
@@ -328,6 +337,17 @@ def user_bot_handle_message(base_url, token, message):
                     f"Спасибо за оплату!"
                 ),
             })
+            # Уведомление владельцу бота
+            owner_id = find_bot_owner(token)
+            if owner_id and owner_id != chat_id:
+                user_bot_api(base_url, token, "sendMessage", {
+                    "chat_id": owner_id,
+                    "text": (
+                        f"Новая оплата!\n\n"
+                        f"Сумма: {amount} Stars\n"
+                        f"Пользователь: {chat_id}"
+                    ),
+                })
         return
 
     text = message.get("text")
@@ -712,6 +732,13 @@ def handle_successful_payment(message):
         ))
     else:
         send_message(chat_id, f"Оплата {amount} {currency} получена!")
+        # Уведомление админу
+        if chat_id != ADMIN_ID:
+            send_message(ADMIN_ID, (
+                f"Новая оплата!\n\n"
+                f"Сумма: {amount} Stars\n"
+                f"Пользователь: {chat_id}"
+            ))
 
 
 # ============================================================
@@ -1001,7 +1028,7 @@ def main_bot_handle_inline(inline_query):
 
     user = inline_query.get("from") or {}
     user_id = user.get("id", 0)
-    payload = f"inline_{user_id}_{amount}_{uuid.uuid4().hex}"
+    payload = f"inline_{user_id}_{amount}"
 
     result = {
         "type": "article",
