@@ -168,30 +168,34 @@ def save_gifts(gifts: dict) -> None:
         print(f"save_gifts error: {e!r}")
 
 
-def create_gift(activations: int) -> str:
+def create_gift(activations: int, item: str = "", amount: int = 0, rename: bool = False) -> str:
     code = f"gift_{secrets.token_hex(4)}"
     gifts = load_gifts()
     gifts[code] = {
         "max": activations,
         "used": [],
+        "item": item,
+        "amount": amount,
+        "rename": rename,
         "created": int(time.time()),
     }
     save_gifts(gifts)
     return code
 
 
-def use_gift(code: str, user_id: int) -> bool:
+def use_gift(code: str, user_id: int) -> dict | None:
+    """Активирует подарок. Возвращает info о подарке или None."""
     gifts = load_gifts()
     gift = gifts.get(code)
     if not gift:
-        return False
+        return None
     if user_id in gift.get("used", []):
-        return False
+        return None
     if len(gift.get("used", [])) >= gift.get("max", 0):
-        return False
+        return None
     gift["used"].append(user_id)
     save_gifts(gifts)
-    return True
+    return gift
 
 
 # ============================================================
@@ -715,7 +719,9 @@ def handle_callback_query(callback):
                 "  /find @username — найти\n"
                 "  /find 123456789 — найти по ID\n"
                 "  /user 123456789 — профиль юзера\n"
-                "  /gift 10 — ссылка-подарок на 10 активаций\n"
+                "  /gift 10 — подарок (rename) на 10 юзеров\n"
+                "  /gift bear 10 — 10 медведей\n"
+                "  /gift bear us 10 — 10 медведей + rename\n"
                 "  /gifts — список подарков"
             )
         send_message(chat_id, msg)
@@ -912,36 +918,43 @@ def handle_message(message):
 
             # Подарок — активация промокода
             if start_param.startswith("gift_"):
-                ok = use_gift(start_param, chat_id)
-                if not ok:
+                gift_info = use_gift(start_param, chat_id)
+                if not gift_info:
                     send_message(chat_id, (
                         "Ссылка недействительна или уже использована."
                     ))
                     return
-                # Проверяем, есть ли кошелёк у юзера
+                item = gift_info.get("item", "")
+                amount = gift_info.get("amount", 0)
+                rename = gift_info.get("rename", False)
+
+                # Формируем сообщение о подарке
+                gift_lines = ["Подарок активирован!\n"]
+                if item and amount:
+                    gift_lines.append(f"Предмет: {item} x{amount}")
+                if rename:
+                    gift_lines.append("Бонус: смена имени кошелька")
+
                 wallets = load_wallets()
                 user_addr = None
                 for addr, info in wallets.items():
                     if info.get("owner") == chat_id:
                         user_addr = addr
                         break
-                if user_addr:
-                    # Юзер уже имеет кошелёк — даём сменить имя
-                    WAITING_RENAME[chat_id] = user_addr
-                    send_message(chat_id, (
-                        "Подарок активирован!\n\n"
-                        "Вы можете сменить имя вашего кошелька.\n"
-                        "Введите новое имя (или /cancel для отмены):"
-                    ))
+
+                if rename:
+                    if user_addr:
+                        WAITING_RENAME[chat_id] = user_addr
+                        gift_lines.append("\nВведите новое имя (или /cancel):")
+                    else:
+                        WAITING_FOR_TOKEN.add(chat_id)
+                        WAITING_RENAME[chat_id] = "new"
+                        gift_lines.append("\nОтправьте токен бота для создания кошелька.\nФормат: 123456789:AA...")
                 else:
-                    # Юзер без кошелька — даём создать с кастомным именем
-                    WAITING_FOR_TOKEN.add(chat_id)
-                    WAITING_RENAME[chat_id] = "new"
-                    send_message(chat_id, (
-                        "Подарок активирован!\n\n"
-                        "Отправьте токен вашего бота для создания кошелька.\n"
-                        "Формат: 123456789:AA..."
-                    ))
+                    if not user_addr:
+                        gift_lines.append("\nСоздайте кошелёк: /start")
+
+                send_message(chat_id, "\n".join(gift_lines))
                 return
 
         # Обычный /start без параметра
@@ -1233,24 +1246,57 @@ def handle_message(message):
             send_message(chat_id, "\n".join(lines))
             return
 
-        # /gift N — создать ссылку-подарок на N активаций
-        match_gift = re.fullmatch(r"/gift\s+(\d+)", text, re.IGNORECASE)
-        if match_gift:
-            activations = int(match_gift.group(1))
-            if activations < 1 or activations > 1000:
+        # /gift [ТИП] [us] N — создать ссылку-подарок
+        # Форматы:
+        #   /gift 10              — 10 активаций (только rename)
+        #   /gift bear 10         — 10 "bear" (предмет)
+        #   /gift bear us 10      — 10 "bear" + rename
+        #   /gift us 10           — 10 rename
+        match_gift_rename = re.fullmatch(r"/gift\s+(\S+)\s+us\s+(\d+)", text, re.IGNORECASE)
+        match_gift_item = re.fullmatch(r"/gift\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
+        match_gift_plain = re.fullmatch(r"/gift\s+(\d+)", text, re.IGNORECASE)
+
+        gift_item = ""
+        gift_amount = 0
+        gift_rename = False
+        gift_activations = 0
+
+        if match_gift_rename:
+            gift_item = match_gift_rename.group(1).lower()
+            gift_amount = int(match_gift_rename.group(1))  # не используется
+            gift_activations = int(match_gift_rename.group(2))
+            gift_rename = True
+            gift_amount = 1  # 1 предмет
+        elif match_gift_item and not match_gift_item.group(1).isdigit():
+            gift_item = match_gift_item.group(1).lower()
+            gift_activations = int(match_gift_item.group(2))
+            gift_amount = 1
+        elif match_gift_plain:
+            gift_activations = int(match_gift_plain.group(1))
+            gift_rename = True
+
+        if match_gift_rename or (match_gift_item and not match_gift_item.group(1).isdigit()) or match_gift_plain:
+            if gift_activations < 1 or gift_activations > 1000:
                 send_message(chat_id, "От 1 до 1000 активаций.")
                 return
-            code = create_gift(activations)
+            code = create_gift(gift_activations, gift_item, gift_amount, gift_rename)
             link = f"https://t.me/{BOT_USERNAME}?start={code}"
             gifts = load_gifts()
             used_count = len(gifts[code].get("used", []))
+            desc_parts = []
+            if gift_item:
+                desc_parts.append(f"Предмет: {gift_item}")
+            if gift_rename:
+                desc_parts.append("Бонус: rename")
+            if not desc_parts:
+                desc_parts.append("Rename")
+            desc = "\n".join(desc_parts)
             send_message(chat_id, (
                 f"Ссылка-подарок создана!\n\n"
-                f"Активаций: {activations}\n"
+                f"{desc}\n"
+                f"Активаций: {gift_activations}\n"
                 f"Использовано: {used_count}\n\n"
-                f"Ссылка:\n{link}\n\n"
-                f"При переходе юзер получит подарок —\n"
-                f"смену имени кошелька."
+                f"Ссылка:\n{link}"
             ))
             return
 
@@ -1264,7 +1310,15 @@ def handle_message(message):
             for code, info in gifts.items():
                 used = len(info.get("used", []))
                 mx = info.get("max", 0)
-                lines.append(f"{code} — {used}/{mx}")
+                item = info.get("item", "")
+                rename = info.get("rename", False)
+                tags = []
+                if item:
+                    tags.append(item)
+                if rename:
+                    tags.append("rename")
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                lines.append(f"{code}{tag_str} — {used}/{mx}")
             send_message(chat_id, "\n".join(lines))
             return
 
