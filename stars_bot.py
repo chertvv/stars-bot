@@ -325,9 +325,12 @@ def user_bot_handle_message(base_url, token, message):
                     ),
                 })
                 # Уведомление владельцу кошелька
-                if from_id:
+                wallets = load_wallets()
+                wallet_info = wallets.get(wallet_addr, {})
+                owner_id = wallet_info.get("owner", 0)
+                if owner_id:
                     user_bot_api(base_url, token, "sendMessage", {
-                        "chat_id": from_id,
+                        "chat_id": owner_id,
                         "text": (
                             f"Поступила оплата!\n\n"
                             f"Сумма: {amount} Stars\n"
