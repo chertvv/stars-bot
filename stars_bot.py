@@ -825,18 +825,26 @@ def handle_message(message):
         send_message(chat_id, "У вас нет кошелька. Создайте: /start")
         return
 
-    # /send АДРЕС СУММА
-    match = re.fullmatch(r"/send(?:@\w+)?\s+(\w+)\s+(\d+)", text, re.IGNORECASE)
+    # /send АДРЕС_или_ИМЯ СУММА
+    match = re.fullmatch(r"/send(?:@\w+)?\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
     if match:
-        address = match.group(1).lower()
+        target = match.group(1).lower()
         amount = int(match.group(2))
         if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
             send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
             return
         wallets = load_wallets()
-        wallet = wallets.get(address)
+        # Ищем по адресу или по имени
+        wallet = wallets.get(target)
+        address = target
         if not wallet:
-            send_message(chat_id, f"Кошелёк {address} не найден.")
+            for addr, info in wallets.items():
+                if info.get("name", "").lower() == target:
+                    wallet = info
+                    address = addr
+                    break
+        if not wallet:
+            send_message(chat_id, f"Кошелёк {target} не найден.")
             return
         # Создаём ссылку
         code = create_check(chat_id, amount, address)
@@ -925,26 +933,51 @@ def handle_message(message):
             return
 
         # /us АДРЕС новое_имя — задать кастомное имя кошелька
-        match_us = re.fullmatch(r"/us\s+(\w+)\s+(.+)", text, re.IGNORECASE)
+        match_us = re.fullmatch(r"/us\s+(\S+)\s+(.+)", text, re.IGNORECASE)
         if match_us:
-            address = match_us.group(1).lower()
+            target = match_us.group(1).lower()
             new_name = match_us.group(2).strip()
             wallets = load_wallets()
-            if address not in wallets:
-                send_message(chat_id, f"Кошелёк {address} не найден.")
+            # Ищем по адресу или по имени
+            address = target if target in wallets else None
+            if not address:
+                for addr, info in wallets.items():
+                    if info.get("name", "").lower() == target:
+                        address = addr
+                        break
+            if not address:
+                send_message(chat_id, f"Кошелёк {target} не найден.")
                 return
             wallets[address]["name"] = new_name
             save_wallets(wallets)
             send_message(chat_id, f"Кошелёк {address} переименован в «{new_name}»")
+            # Уведомление владельцу
+            owner_id = wallets[address].get("owner", 0)
+            bot_username = wallets[address].get("username", "")
+            if owner_id and owner_id != chat_id:
+                send_message(owner_id, (
+                    f"Админ выдал имя вашему кошельку\n\n"
+                    f"Адрес: {address}\n"
+                    f"Имя: {new_name}\n"
+                    f"Бот: @{bot_username}\n\n"
+                    f"Теперь вы можете принимать оплату:\n"
+                    f"/send {new_name} СУММА"
+                ))
             return
 
-        # /del АДРЕС — удалить кошелёк
-        match_del = re.fullmatch(r"/del\s+(\w+)", text, re.IGNORECASE)
+        # /del АДРЕС_или_ИМЯ — удалить кошелёк
+        match_del = re.fullmatch(r"/del\s+(\S+)", text, re.IGNORECASE)
         if match_del:
-            address = match_del.group(1).lower()
+            target = match_del.group(1).lower()
             wallets = load_wallets()
-            if address not in wallets:
-                send_message(chat_id, f"Кошелёк {address} не найден.")
+            address = target if target in wallets else None
+            if not address:
+                for addr, info in wallets.items():
+                    if info.get("name", "").lower() == target:
+                        address = addr
+                        break
+            if not address:
+                send_message(chat_id, f"Кошелёк {target} не найден.")
                 return
             del wallets[address]
             save_wallets(wallets)
