@@ -916,13 +916,24 @@ def handle_message(message):
             WAITING_RENAME.pop(chat_id, None)
             send_message(chat_id, "Ок. Имя не изменено.")
             return
-        if text.startswith("/"):
-            WAITING_RENAME.pop(chat_id, None)
-            # Обрабатываем команду ниже
+        if text == "/my" or text == "/start":
+            # Не сбрасываем — просто покажем кошелёк
+            pass
+        elif text.startswith("/"):
+            # Другие команды — не сбрасываем rename, обрабатываем ниже
+            pass
         else:
             address = WAITING_RENAME.pop(chat_id)
             if address == "new":
                 WAITING_RENAME.pop(chat_id, None)
+                return
+            # Не даём записать токен как имя
+            if re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", text):
+                send_message(chat_id, (
+                    "Это похоже на токен, а не имя.\n"
+                    "Введите имя для кошелька (или /cancel):"
+                ))
+                WAITING_RENAME[chat_id] = address
                 return
             wallets = load_wallets()
             if address in wallets:
