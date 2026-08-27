@@ -641,16 +641,27 @@ def handle_callback_query(callback):
 
     if data == "help":
         answer_callback(callback_id)
-        send_message(chat_id, (
+        is_admin = chat_id == ADMIN_ID
+        msg = (
             "Помощь\n\n"
             "Кошелёк:\n"
-            "  /start — создать кошелёк (ввести токен)\n"
+            "  /start — создать кошелёк\n"
             "  /my — мой кошелёк\n\n"
             "Оплата:\n"
-            "  /send АДРЕС СУММА — создать ссылку\n"
-            "  /pay 100 — оплата через основного бота\n"
+            "  /send АДРЕС СУММА — ссылка на оплату\n"
+            "  /pay 100 — оплата через бота\n"
             "  @bot 10 — inline-счёт"
-        ))
+        )
+        if is_admin:
+            msg += (
+                "\n\nАдмин:\n"
+                "  /stats — статистика\n"
+                "  /wallets — список кошельков\n"
+                "  /us АДРЕС ИМЯ — задать имя\n"
+                "  /del АДРЕС — удалить\n"
+                "  /find @username — найти"
+            )
+        send_message(chat_id, msg)
         return
 
 
@@ -752,6 +763,7 @@ def handle_message(message):
                 "username": bot_username,
                 "base_url": base_url,
                 "owner": chat_id,
+                "name": "",
                 "created": int(time.time()),
             }
             save_wallets(wallets)
@@ -799,8 +811,10 @@ def handle_message(message):
         wallets = load_wallets()
         for addr, info in wallets.items():
             if info.get("owner") == chat_id:
+                name = info.get("name", "")
+                name_str = f" ({name})" if name else ""
                 send_message(chat_id, (
-                    f"Ваш кошелёк: {addr}\n"
+                    f"Ваш кошелёк: {addr}{name_str}\n"
                     f"Бот: @{info.get('username', '?')}\n\n"
                     f"Отправка средств:\n"
                     f"/send {addr} СУММА"
@@ -874,7 +888,26 @@ def handle_message(message):
 
     # Админ-команды
     if chat_id == ADMIN_ID:
+        # /stats — полная статистика
         if text == "/stats":
+            wallets = load_wallets()
+            checks = load_checks()
+            paid_checks = [c for c in checks.values() if c.get("paid")]
+            total_paid = sum(c.get("amount", 0) for c in paid_checks)
+            active_bots = sum(1 for t in user_bot_threads.values() if t.is_alive())
+            lines = [
+                "Статистика\n",
+                f"Кошельков: {len(wallets)}",
+                f"Ссылок создано: {len(checks)}",
+                f"Оплачено: {len(paid_checks)}",
+                f"Сумма оплат: {total_paid} Stars",
+                f"Активных ботов: {active_bots}",
+            ]
+            send_message(chat_id, "\n".join(lines))
+            return
+
+        # /wallets — список кошельков
+        if text == "/wallets":
             wallets = load_wallets()
             if not wallets:
                 send_message(chat_id, "Нет кошельков.")
@@ -883,20 +916,51 @@ def handle_message(message):
             for addr, info in wallets.items():
                 uname = info.get("username", "?")
                 owner = info.get("owner", "?")
-                active = "+" if addr in [a for a in user_bot_threads if user_bot_threads[a].is_alive()] else "-"
-                lines.append(f"{active} {addr} @{uname} (owner: {owner})")
+                name = info.get("name", "")
+                name_str = f" [{name}]" if name else ""
+                lines.append(f"{addr}{name_str} @{uname} (owner: {owner})")
             send_message(chat_id, "\n".join(lines))
             return
 
-        if text == "/list":
+        # /us АДРЕС новое_имя — задать кастомное имя кошелька
+        match_us = re.fullmatch(r"/us\s+(\w+)\s+(.+)", text, re.IGNORECASE)
+        if match_us:
+            address = match_us.group(1).lower()
+            new_name = match_us.group(2).strip()
             wallets = load_wallets()
-            if not wallets:
-                send_message(chat_id, "Нет кошельков.")
+            if address not in wallets:
+                send_message(chat_id, f"Кошелёк {address} не найден.")
                 return
-            lines = ["Кошельки:\n"]
+            wallets[address]["name"] = new_name
+            save_wallets(wallets)
+            send_message(chat_id, f"Кошелёк {address} переименован в «{new_name}»")
+            return
+
+        # /del АДРЕС — удалить кошелёк
+        match_del = re.fullmatch(r"/del\s+(\w+)", text, re.IGNORECASE)
+        if match_del:
+            address = match_del.group(1).lower()
+            wallets = load_wallets()
+            if address not in wallets:
+                send_message(chat_id, f"Кошелёк {address} не найден.")
+                return
+            del wallets[address]
+            save_wallets(wallets)
+            send_message(chat_id, f"Кошелёк {address} удалён.")
+            return
+
+        # /find @username — найти кошелёк по боту
+        match_find = re.fullmatch(r"/find\s+@(\w+)", text, re.IGNORECASE)
+        if match_find:
+            target = match_find.group(1).lower()
+            wallets = load_wallets()
             for addr, info in wallets.items():
-                lines.append(f"{addr} -> @{info.get('username', '?')}")
-            send_message(chat_id, "\n".join(lines))
+                if info.get("username", "").lower() == target:
+                    name = info.get("name", "")
+                    name_str = f" [{name}]" if name else ""
+                    send_message(chat_id, f"@{target} -> {addr}{name_str} (owner: {info.get('owner', '?')})")
+                    return
+            send_message(chat_id, f"Кошелёк для @{target} не найден.")
             return
 
 
