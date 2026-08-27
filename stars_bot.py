@@ -200,6 +200,63 @@ def use_gift(code: str, user_id: int) -> dict | None:
 
 
 # ============================================================
+# PROMOS (текстовые промокоды)
+# ============================================================
+
+PROMOS_FILE = Path(__file__).parent / "promos.json"
+
+
+def load_promos() -> dict:
+    if PROMOS_FILE.exists():
+        try:
+            return json.loads(PROMOS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_promos(promos: dict) -> None:
+    try:
+        PROMOS_FILE.write_text(
+            json.dumps(promos, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"save_promos error: {e!r}")
+
+
+def create_promo(code: str, activations: int, item: str = "", rename: bool = False, gift_id: str = "") -> bool:
+    promos = load_promos()
+    if code in promos:
+        return False
+    promos[code] = {
+        "max": activations,
+        "used": [],
+        "item": item,
+        "rename": rename,
+        "gift_id": gift_id,
+        "created": int(time.time()),
+    }
+    save_promos(promos)
+    return True
+
+
+def use_promo(code: str, user_id: int) -> dict | None:
+    """Активирует промокод. Возвращает info или None."""
+    promos = load_promos()
+    promo = promos.get(code)
+    if not promo:
+        return None
+    if user_id in promo.get("used", []):
+        return None
+    if len(promo.get("used", [])) >= promo.get("max", 0):
+        return None
+    promo["used"].append(user_id)
+    save_promos(promos)
+    return promo
+
+
+# ============================================================
 # TELEGRAM GIFTS CATALOG
 # ============================================================
 
@@ -741,7 +798,9 @@ def handle_callback_query(callback):
             "Оплата:\n"
             "  /send АДРЕС СУММА — ссылка на оплату\n"
             "  /pay 100 — оплата через бота\n"
-            "  @bot 10 — inline-счёт"
+            "  @bot 10 — inline-счёт\n\n"
+            "Промокоды:\n"
+            "  /redeem КОД — активировать промокод"
         )
         if is_admin:
             msg += (
@@ -757,7 +816,13 @@ def handle_callback_query(callback):
                 "  /gift bear 10 — 10 медведей (TG Gift)\n"
                 "  /gift bear us 10 — 10 медведей + rename\n"
                 "  /gift rose us 5 — 5 роз + rename\n"
-                "  /gifts — список созданных"
+                "  /gifts — список подарков\n\n"
+                "Промокоды:\n"
+                "  /promo START 10 — промокод (rename)\n"
+                "  /promo BEAR bear 10 — 10 медведей\n"
+                "  /promo BEAR bear us 10 — 10 медведей + rename\n"
+                "  /promos — список промокодов\n"
+                "  /delpromo CODE — удалить промокод"
             )
         send_message(chat_id, msg)
         return
@@ -1046,6 +1111,57 @@ def handle_message(message):
                 ))
                 return
         send_message(chat_id, "У вас нет кошелька. Создайте: /start")
+        return
+
+    # /redeem КОД — активировать промокод
+    match_redeem = re.fullmatch(r"/redeem(?:@\w+)?\s+(\S+)", text, re.IGNORECASE)
+    if match_redeem:
+        pcode = match_redeem.group(1).upper()
+        promo_info = use_promo(pcode, chat_id)
+        if not promo_info:
+            send_message(chat_id, "Промокод недействителен или уже использован.")
+            return
+
+        item = promo_info.get("item", "")
+        rename = promo_info.get("rename", False)
+        tg_gift_id = promo_info.get("gift_id", "")
+
+        # Отправляем реальный TG Gift
+        gift_sent = False
+        if tg_gift_id:
+            gift_sent = send_tg_gift(BOT_TOKEN, chat_id, tg_gift_id)
+
+        lines = [f"🎟 Промокод {pcode} активирован!\n"]
+        if item:
+            cat = GIFTS_CATALOG.get(item, {})
+            lines.append(f"🎁 {cat.get('title', item)}")
+        if gift_sent:
+            lines.append("✅ Telegram Gift отправлен вам!")
+        elif tg_gift_id:
+            lines.append("⚠️ Не удалось отправить Gift")
+        if rename:
+            lines.append("✨ Бонус: смена имени кошелька")
+
+        wallets = load_wallets()
+        user_addr = None
+        for addr, info in wallets.items():
+            if info.get("owner") == chat_id:
+                user_addr = addr
+                break
+
+        if rename:
+            if user_addr:
+                WAITING_RENAME[chat_id] = user_addr
+                lines.append("\nВведите новое имя (или /cancel):")
+            else:
+                WAITING_FOR_TOKEN.add(chat_id)
+                WAITING_RENAME[chat_id] = "new"
+                lines.append("\nОтправьте токен бота для создания кошелька.")
+        else:
+            if not user_addr:
+                lines.append("\nСоздайте кошелёк: /start")
+
+        send_message(chat_id, "\n".join(lines))
         return
 
     # Ждём сумму для /send (после /send АДРЕС без суммы)
@@ -1399,10 +1515,112 @@ def handle_message(message):
             send_message(chat_id, "\n".join(lines))
             return
 
+        # /promo CODE [ITEM] [us] N — создать промокод
+        # Форматы:
+        #   /promo START 10            — 10 активаций (только rename)
+        #   /promo BEAR bear 10        — 10 медведей
+        #   /promo BEAR bear us 10     — 10 медведей + rename
+        #   /promo ROSE rose us 5       — 5 роз + rename
+        match_promo_rename = re.fullmatch(r"/promo\s+(\S+)\s+(\S+)\s+us\s+(\d+)", text, re.IGNORECASE)
+        match_promo_item = re.fullmatch(r"/promo\s+(\S+)\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
+        match_promo_plain = re.fullmatch(r"/promo\s+(\S+)\s+(\d+)", text, re.IGNORECASE)
 
-# ============================================================
-# ОСНОВНОЙ БОТ: PRE-CHECKOUT
-# ============================================================
+        promo_code = ""
+        promo_item = ""
+        promo_rename = False
+        promo_activations = 0
+        promo_gift_id = ""
+        promo_matched = False
+
+        if match_promo_rename:
+            promo_code = match_promo_rename.group(1).upper()
+            promo_item = match_promo_rename.group(2).lower()
+            promo_activations = int(match_promo_rename.group(3))
+            promo_rename = True
+            promo_matched = True
+        elif match_promo_item and not match_promo_item.group(2).isdigit():
+            promo_code = match_promo_item.group(1).upper()
+            promo_item = match_promo_item.group(2).lower()
+            promo_activations = int(match_promo_item.group(3))
+            promo_matched = True
+        elif match_promo_plain:
+            promo_code = match_promo_plain.group(1).upper()
+            promo_activations = int(match_promo_plain.group(2))
+            promo_rename = True
+            promo_matched = True
+
+        if promo_matched:
+            if promo_item:
+                cat = GIFTS_CATALOG.get(promo_item)
+                if not cat:
+                    available = ", ".join(GIFTS_CATALOG.keys())
+                    send_message(chat_id, f"Предмет не найден: {promo_item}\n\nДоступные: {available}")
+                    return
+                promo_gift_id = cat["id"]
+
+            if promo_activations < 1 or promo_activations > 10000:
+                send_message(chat_id, "От 1 до 10000 активаций.")
+                return
+
+            ok = create_promo(promo_code, promo_activations, promo_item, promo_rename, promo_gift_id)
+            if not ok:
+                send_message(chat_id, f"Промокод {promo_code} уже существует.")
+                return
+
+            desc_parts = []
+            if promo_item:
+                cat = GIFTS_CATALOG.get(promo_item, {})
+                desc_parts.append(f"🎁 {cat.get('title', promo_item)} ({cat.get('stars', '?')} Stars)")
+            if promo_rename:
+                desc_parts.append("✨ Rename")
+            if not desc_parts:
+                desc_parts.append("✨ Rename")
+            desc = "\n".join(desc_parts)
+
+            send_message(chat_id, (
+                f"Промокод создан!\n\n"
+                f"Код: {promo_code}\n"
+                f"{desc}\n"
+                f"Активаций: {promo_activations}\n\n"
+                f"Юзерам: /redeem {promo_code}"
+            ))
+            return
+
+        # /promos — список промокодов
+        if text == "/promos":
+            promos = load_promos()
+            if not promos:
+                send_message(chat_id, "Нет промокодов.")
+                return
+            lines = ["Промокоды:\n"]
+            for code, info in promos.items():
+                used = len(info.get("used", []))
+                mx = info.get("max", 0)
+                item = info.get("item", "")
+                rename = info.get("rename", False)
+                tags = []
+                if item:
+                    cat = GIFTS_CATALOG.get(item, {})
+                    tags.append(cat.get("title", item))
+                if rename:
+                    tags.append("rename")
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                lines.append(f"{code}{tag_str} — {used}/{mx}")
+            send_message(chat_id, "\n".join(lines))
+            return
+
+        # /delpromo CODE — удалить промокод
+        match_delpromo = re.fullmatch(r"/delpromo\s+(\S+)", text, re.IGNORECASE)
+        if match_delpromo:
+            pcode = match_delpromo.group(1).upper()
+            promos = load_promos()
+            if pcode not in promos:
+                send_message(chat_id, f"Промокод {pcode} не найден.")
+                return
+            del promos[pcode]
+            save_promos(promos)
+            send_message(chat_id, f"Промокод {pcode} удалён.")
+            return
 
 def answer_pre_checkout(query):
     if not isinstance(query, dict):
