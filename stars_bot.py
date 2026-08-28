@@ -1145,10 +1145,8 @@ def handle_callback_query(callback):
     if data.startswith("inline_pay_"):
         amount = int(data[len("inline_pay_"):])
         answer_callback(callback_id)
-        from_user = callback.get("from") or {}
-        user_id = from_user.get("id", chat_id)
         result = telegram("sendInvoice", {
-            "chat_id": user_id,
+            "chat_id": chat_id,
             "title": f"Оплата {amount} Stars",
             "description": f"Оплата на сумму {amount} Stars",
             "payload": "main_bot_payment",
@@ -1157,7 +1155,7 @@ def handle_callback_query(callback):
         })
         if not isinstance(result, dict) or result.get("ok") is not True:
             desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-            send_message(user_id, f"Не удалось создать счёт.\n\n{desc}")
+            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
         return
 
     if data == "create_bot":
