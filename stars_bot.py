@@ -55,6 +55,7 @@ WAITING_FOR_TOKEN: set[int] = set()
 WAITING_SEND_AMOUNT: dict[int, dict] = {}
 SEND_ERROR_COUNT: dict[int, int] = {}
 WAITING_RENAME: dict[int, str] = {}
+WAITING_RECREATE: dict[int, str] = {}
 WAITING_WALLET_BUY: set[int] = set()
 user_bot_threads: dict[int, threading.Thread] = {}
 
@@ -169,6 +170,7 @@ TRANSLATIONS = {
         "wallet_recreated": "✅ Адрес пересоздан!\n\nСтарый: {old}\nНовый: {new}\nБот: @{bot}\n\nОтправка: /send {new} СУММА",
         "wallet_cant_delete_one": "Нельзя удалить единственный кошелёк.",
         "wallet_select_recreate": "Выберите кошелёк для пересоздания:",
+        "wallet_recreate_prompt": "Старый адрес удалён.\n\nОтправьте новый токен бота для создания кошелька.\nФормат: 123456789:AA...\n\nПолучить токен: @BotFather -> /newbot",
         "wallet_select_delete": "Выберите кошелёк для удаления:",
         "wallet_limit_reached": "Лимит кошельков ({max}) достигнут.",
         "invoice_failed": "Не удалось создать счёт.\n\n{desc}",
@@ -267,6 +269,7 @@ TRANSLATIONS = {
         "wallet_recreated": "✅ Address recreated!\n\nOld: {old}\nNew: {new}\nBot: @{bot}\n\nSend: /send {new} AMOUNT",
         "wallet_cant_delete_one": "Cannot delete your only wallet.",
         "wallet_select_recreate": "Select a wallet to recreate:",
+        "wallet_recreate_prompt": "Old address deleted.\n\nSend a new bot token to create a wallet.\nFormat: 123456789:AA...\n\nGet token: @BotFather -> /newbot",
         "wallet_select_delete": "Select a wallet to delete:",
         "wallet_limit_reached": "Wallet limit ({max}) reached.",
         "invoice_failed": "Failed to create invoice.\n\n{desc}",
@@ -1213,20 +1216,13 @@ def handle_wallet_callback(callback_id, chat_id, data):
             send_message(chat_id, t(chat_id, "no_wallets"))
             return
         if len(user_wallets) == 1:
-            addr, info = user_wallets[0]
-            new_addr = generate_address()
+            addr = user_wallets[0][0]
             wallets = load_wallets()
-            wallets[new_addr] = {
-                "token": info["token"],
-                "username": info["username"],
-                "base_url": info["base_url"],
-                "owner": info["owner"],
-                "name": info["name"],
-                "created": int(time.time()),
-            }
             del wallets[addr]
             save_wallets(wallets)
-            send_message(chat_id, t(chat_id, "wallet_recreated", old=addr, new=new_addr, bot=info["username"]))
+            WAITING_RECREATE[chat_id] = "recreate"
+            WAITING_FOR_TOKEN.add(chat_id)
+            send_message(chat_id, t(chat_id, "wallet_recreate_prompt"))
         else:
             keyboard = {"inline_keyboard": [[
                 {"text": f"{a}", "callback_data": f"wallet_recreate_{a}"}
@@ -1242,18 +1238,11 @@ def handle_wallet_callback(callback_id, chat_id, data):
         if not info or info.get("owner") != chat_id:
             send_message(chat_id, t(chat_id, "wallet_not_found_short"))
             return
-        new_addr = generate_address()
-        wallets[new_addr] = {
-            "token": info["token"],
-            "username": info["username"],
-            "base_url": info["base_url"],
-            "owner": info["owner"],
-            "name": info["name"],
-            "created": int(time.time()),
-        }
         del wallets[addr]
         save_wallets(wallets)
-        send_message(chat_id, t(chat_id, "wallet_recreated", old=addr, new=new_addr, bot=info["username"]))
+        WAITING_RECREATE[chat_id] = "recreate"
+        WAITING_FOR_TOKEN.add(chat_id)
+        send_message(chat_id, t(chat_id, "wallet_recreate_prompt"))
         return
 
     if data == "wallet_delete":
@@ -1668,11 +1657,13 @@ def handle_message(message):
 
             user_wallets = get_user_wallets(chat_id)
             is_buy = has_pending_buy(chat_id)
-            if len(user_wallets) >= MAX_WALLETS and not is_buy:
+            is_recreate = chat_id in WAITING_RECREATE
+            if len(user_wallets) >= MAX_WALLETS and not is_buy and not is_recreate:
                 send_message(chat_id, t(chat_id, "wallet_limit", max=MAX_WALLETS))
                 WAITING_FOR_TOKEN.discard(chat_id)
+                WAITING_RECREATE.pop(chat_id, None)
                 return
-            if len(user_wallets) >= 1 and not is_buy:
+            if len(user_wallets) >= 1 and not is_buy and not is_recreate:
                 send_message(chat_id, t(chat_id, "wallet_second_paid", price=WALLET_PRICE))
                 WAITING_FOR_TOKEN.discard(chat_id)
                 return
@@ -1702,6 +1693,7 @@ def handle_message(message):
             }
             save_wallets(wallets)
             remove_pending_buy(chat_id)
+            WAITING_RECREATE.pop(chat_id, None)
 
             # Если активирован подарок — просим имя
             if chat_id in WAITING_RENAME:
