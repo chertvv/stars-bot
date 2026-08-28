@@ -1142,22 +1142,6 @@ def handle_callback_query(callback):
         handle_wallet_callback(callback_id, chat_id, data)
         return
 
-    if data.startswith("inline_pay_"):
-        amount = int(data[len("inline_pay_"):])
-        answer_callback(callback_id)
-        result = telegram("sendInvoice", {
-            "chat_id": chat_id,
-            "title": f"Оплата {amount} Stars",
-            "description": f"Оплата на сумму {amount} Stars",
-            "payload": "main_bot_payment",
-            "currency": "XTR",
-            "prices": [{"label": f"{amount} Stars", "amount": amount}],
-        })
-        if not isinstance(result, dict) or result.get("ok") is not True:
-            desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
-        return
-
     if data == "create_bot":
         answer_callback(callback_id)
         WAITING_FOR_TOKEN.add(chat_id)
@@ -2251,17 +2235,96 @@ def handle_inline_query_main(inline_query):
         })
         return
 
+    user = inline_query.get("from") or {}
+    user_id = user.get("id", 0)
+    user_wallets = get_user_wallets(user_id) if user_id else []
+
+    if not user_wallets:
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": [{
+                "type": "article",
+                "id": "no_wallet",
+                "title": "У вас нет кошелька",
+                "description": "Создайте кошелёк: /start у @kise",
+                "input_message_content": {
+                    "message_text": "У вас нет кошелька.\n\nСоздайте: /start у @kise",
+                },
+            }],
+            "cache_time": 30,
+            "is_personal": True,
+        })
+        return
+
+    if len(user_wallets) == 1:
+        addr, wallet = user_wallets[0]
+    else:
+        results = []
+        for addr, wallet in user_wallets:
+            code = create_check(user_id, amount, addr)
+            bot_username = wallet.get("username", "bot")
+            name = wallet.get("name", "")
+            display = f"{name} ({addr})" if name else addr
+            url = f"https://t.me/{bot_username}?start={code}"
+            wt = wallet.get("token", "")
+            wbu = wallet.get("base_url", API_BASE)
+            if wt:
+                start_user_bot(address_hash(addr), wt, wbu)
+                def _stop_multi(a=addr):
+                    stop_user_bot(address_hash(a))
+                timer = threading.Timer(300, _stop_multi)
+                timer.daemon = True
+                timer.start()
+            results.append({
+                "type": "article",
+                "id": f"wallet_{addr}",
+                "title": f"Счёт на {amount} Stars → @{bot_username}",
+                "description": f"Кошелёк: {display}",
+                "input_message_content": {
+                    "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\nКошелёк: {display}\n\nНажмите кнопку для оплаты:",
+                },
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": f"Оплатить {amount} Stars", "url": url},
+                    ]],
+                },
+            })
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": results,
+            "cache_time": 1,
+            "is_personal": True,
+        })
+        return
+
+    addr, wallet = user_wallets[0]
+    bot_username = wallet.get("username", "bot")
+    name = wallet.get("name", "")
+    display = f"{name} ({addr})" if name else addr
+    code = create_check(user_id, amount, addr)
+    url = f"https://t.me/{bot_username}?start={code}"
+    token = wallet.get("token", "")
+    base_url = wallet.get("base_url", API_BASE)
+
+    if token:
+        start_user_bot(address_hash(addr), token, base_url)
+        def _stop_after_timeout():
+            stop_user_bot(address_hash(addr))
+        timer = threading.Timer(300, _stop_after_timeout)
+        timer.daemon = True
+        timer.start()
+
     result = {
         "type": "article",
         "id": secrets.token_hex(8),
         "title": f"Счёт на {amount} Stars",
-        "description": f"Отправить счёт на {amount} Stars",
+        "description": f"Оплата на @{bot_username}",
         "input_message_content": {
-            "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\n\nНажмите кнопку ниже для оплаты:",
+            "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\nКошелёк: {display}\n\nНажмите кнопку для оплаты:",
         },
         "reply_markup": {
             "inline_keyboard": [[
-                {"text": f"Оплатить {amount} Stars", "callback_data": f"inline_pay_{amount}"},
+                {"text": f"Оплатить {amount} Stars", "url": url},
             ]],
         },
     }
