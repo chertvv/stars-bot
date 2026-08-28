@@ -38,6 +38,8 @@ MAX_AMOUNT = 10000
 WALLETS_FILE = Path(__file__).parent / "wallets.json"
 CHECKS_FILE = Path(__file__).parent / "checks.json"
 GIFTS_FILE = Path(__file__).parent / "gifts.json"
+PROMOS_FILE = Path(__file__).parent / "promos.json"
+BANS_FILE = Path(__file__).parent / "bans.json"
 
 session = requests.Session()
 
@@ -254,6 +256,58 @@ def use_promo(code: str, user_id: int) -> dict | None:
     promo["used"].append(user_id)
     save_promos(promos)
     return promo
+
+
+# ============================================================
+# BANS (баны пользователей)
+# ============================================================
+
+def load_bans() -> dict:
+    if BANS_FILE.exists():
+        try:
+            return json.loads(BANS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_bans(bans: dict) -> None:
+    try:
+        BANS_FILE.write_text(
+            json.dumps(bans, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"save_bans error: {e!r}")
+
+
+def is_banned(user_id: int) -> dict | None:
+    bans = load_bans()
+    key = str(user_id)
+    return bans.get(key)
+
+
+def ban_user(user_id: int, reason: str = "") -> bool:
+    bans = load_bans()
+    key = str(user_id)
+    if key in bans:
+        return False
+    bans[key] = {
+        "reason": reason,
+        "banned_at": int(time.time()),
+    }
+    save_bans(bans)
+    return True
+
+
+def unban_user(user_id: int) -> bool:
+    bans = load_bans()
+    key = str(user_id)
+    if key not in bans:
+        return False
+    del bans[key]
+    save_bans(bans)
+    return True
 
 
 # ============================================================
@@ -777,6 +831,13 @@ def handle_callback_query(callback):
     if not chat_id:
         return
 
+    ban = is_banned(chat_id)
+    if ban:
+        reason = ban.get("reason", "")
+        reason_text = f"\nПричина: {reason}" if reason else ""
+        send_message(chat_id, f"Вы забанены.{reason_text}")
+        return
+
     if data == "create_bot":
         answer_callback(callback_id)
         WAITING_FOR_TOKEN.add(chat_id)
@@ -822,7 +883,11 @@ def handle_callback_query(callback):
                 "  /promo BEAR bear 10 — 10 медведей\n"
                 "  /promo BEAR bear us 10 — 10 медведей + rename\n"
                 "  /promos — список промокодов\n"
-                "  /delpromo CODE — удалить промокод"
+                "  /delpromo CODE — удалить промокод\n\n"
+                "Баны:\n"
+                "  /ban ID [причина] — забанить\n"
+                "  /unban ID — разбанить\n"
+                "  /banlist — список банов"
             )
         send_message(chat_id, msg)
         return
@@ -875,7 +940,7 @@ def _create_send_link(chat_id, address, amount):
     base_url = wallet.get("base_url", API_BASE)
     name = wallet.get("name", "")
     display = f"{name} ({address})" if name else address
-    link = f"https://t.me/kise?start={code}"
+    link = f"https://t.me/{bot_username}?start={code}"
     send_message(chat_id, (
         f"Ссылка для оплаты создана!\n\n"
         f"Кошелёк: {display}\n"
@@ -910,6 +975,13 @@ def handle_message(message):
         return
     text = text.strip()
     if not text:
+        return
+
+    ban = is_banned(chat_id)
+    if ban:
+        reason = ban.get("reason", "")
+        reason_text = f"\nПричина: {reason}" if reason else ""
+        send_message(chat_id, f"Вы забанены.{reason_text}")
         return
 
     # Ждём новое имя кошелька (после подарка)
@@ -1668,6 +1740,50 @@ def handle_message(message):
             del promos[pcode]
             save_promos(promos)
             send_message(chat_id, f"Промокод {pcode} удалён.")
+            return
+
+        # /ban ID [причина] — бан пользователя
+        match_ban = re.fullmatch(r"/ban\s+(\d+)(?:\s+(.+))?", text, re.IGNORECASE)
+        if match_ban:
+            ban_target = int(match_ban.group(1))
+            ban_reason = match_ban.group(2) or ""
+            if ban_target == ADMIN_ID:
+                send_message(chat_id, "Нельзя забанить админа.")
+                return
+            if ban_user(ban_target, ban_reason):
+                msg = f"Пользователь {ban_target} забанен."
+                if ban_reason:
+                    msg += f"\nПричина: {ban_reason}"
+                send_message(chat_id, msg)
+            else:
+                send_message(chat_id, f"Пользователь {ban_target} уже забанен.")
+            return
+
+        # /unban ID — разбан
+        match_unban = re.fullmatch(r"/unban\s+(\d+)", text, re.IGNORECASE)
+        if match_unban:
+            unban_target = int(match_unban.group(1))
+            if unban_user(unban_target):
+                send_message(chat_id, f"Пользователь {unban_target} разбанен.")
+            else:
+                send_message(chat_id, f"Пользователь {unban_target} не забанен.")
+            return
+
+        # /banlist — список банов
+        if text == "/banlist":
+            bans = load_bans()
+            if not bans:
+                send_message(chat_id, "Список банов пуст.")
+                return
+            lines = ["Баны:\n"]
+            for uid, info in bans.items():
+                reason = info.get("reason", "")
+                ts = info.get("banned_at", 0)
+                from datetime import datetime
+                dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "?"
+                r = f" — {reason}" if reason else ""
+                lines.append(f"{uid} [{dt}]{r}")
+            send_message(chat_id, "\n".join(lines))
             return
 
 def answer_pre_checkout(query):
