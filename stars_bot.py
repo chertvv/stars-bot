@@ -894,13 +894,9 @@ def show_wallet_menu(chat_id: int):
         ]
     }
 
-    if count < MAX_WALLETS:
-        price_text = f"🛒 Купить ({WALLET_PRICE} Stars)"
-    else:
-        price_text = "🛕 Лимит достигнут"
     keyboard["inline_keyboard"].append([
-        {"text": "✏️ Переименовать", "callback_data": "wallet_rename"},
-        {"text": price_text, "callback_data": "wallet_buy" if count < MAX_WALLETS else "wallet_nope"},
+        {"text": "🛒 Купить" if count < MAX_WALLETS else "🛕 Лимит достигнут",
+         "callback_data": "wallet_buy" if count < MAX_WALLETS else "wallet_nope"},
     ])
     keyboard["inline_keyboard"].append([
         {"text": "❓ Помощь", "callback_data": "wallet_help"},
@@ -1059,34 +1055,6 @@ def handle_wallet_callback(callback_id, chat_id, data):
 
     if data == "wallet_nope":
         send_message(chat_id, f"Лимит кошельков ({MAX_WALLETS}) достигнут.")
-        return
-
-    if data == "wallet_rename":
-        user_wallets = get_user_wallets(chat_id)
-        if not user_wallets:
-            send_message(chat_id, "У вас нет кошельков.")
-            return
-        if len(user_wallets) == 1:
-            addr = user_wallets[0][0]
-            WAITING_RENAME[chat_id] = addr
-            send_message(chat_id, "Введите новое имя для кошелька (или /cancel):")
-        else:
-            keyboard = {"inline_keyboard": [[
-                {"text": f"{a}", "callback_data": f"wallet_rename_{a}"}
-                for a, _ in user_wallets
-            ], [{"text": "← Назад", "callback_data": "wallet_menu"}]]}
-            send_message(chat_id, "Выберите кошелёк для переименования:", reply_markup=keyboard)
-        return
-
-    if data.startswith("wallet_rename_"):
-        addr = data[len("wallet_rename_"):]
-        wallets = load_wallets()
-        info = wallets.get(addr)
-        if not info or info.get("owner") != chat_id:
-            send_message(chat_id, "Кошелёк не найден.")
-            return
-        WAITING_RENAME[chat_id] = addr
-        send_message(chat_id, "Введите новое имя для кошелька (или /cancel):")
         return
 
     if data == "wallet_help":
