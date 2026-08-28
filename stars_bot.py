@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import string
+from datetime import datetime, timezone
 import threading
 import time
 from pathlib import Path
@@ -805,54 +806,40 @@ def user_bot_handle_message(base_url, token, message):
                 mark_check_paid(code, chat_id)
                 wallet_addr = check.get("wallet", "")
                 from_id = check.get("from", 0)
-                # Чек плательщику
+                charge_id = payment.get("telegram_payment_charge_id", "")
                 user_bot_api(base_url, token, "sendMessage", {
                     "chat_id": chat_id,
-                    "text": (
-                        f"Чек об оплате\n\n"
-                        f"Сумма: {amount} Stars\n"
-                        f"Кошелёк: {wallet_addr}\n"
-                        f"Статус: оплачено"
-                    ),
+                    "text": t(chat_id, "payment_received_wallet", amount=amount),
                 })
-                # Уведомление владельцу кошелька
+                send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
                 wallets = load_wallets()
                 wallet_info = wallets.get(wallet_addr, {})
                 owner_id = wallet_info.get("owner", 0)
                 if owner_id:
                     user_bot_api(base_url, token, "sendMessage", {
                         "chat_id": owner_id,
-                        "text": (
-                            f"Поступила оплата!\n\n"
-                            f"Сумма: {amount} Stars\n"
-                            f"Плательщик: {chat_id}"
-                        ),
+                        "text": t(owner_id, "payment_received_wallet", amount=amount),
                     })
+                    send_receipt_pdf(owner_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
             else:
                 user_bot_api(base_url, token, "sendMessage", {
                     "chat_id": chat_id,
-                    "text": f"Оплата {amount} Stars получена!",
+                    "text": t(chat_id, "payment_received_wallet", amount=amount),
                 })
         else:
-            # Обычная оплата /pay
             user_bot_api(base_url, token, "sendMessage", {
                 "chat_id": chat_id,
-                "text": (
-                    f"Оплата получена!\n\n"
-                    f"Сумма: {amount} Stars"
-                ),
+                "text": t(chat_id, "payment_received_wallet", amount=amount),
             })
-            # Уведомление владельцу кошелька
             owner_addr, owner_id = find_wallet_owner(token)
+            charge_id = payment.get("telegram_payment_charge_id", "")
+            send_receipt_pdf(chat_id, amount, wallet_addr=owner_addr or "", payer_id=chat_id, charge_id=charge_id, fee=0)
             if owner_id and owner_id != chat_id:
                 user_bot_api(base_url, token, "sendMessage", {
                     "chat_id": owner_id,
-                    "text": (
-                        f"Поступила оплата!\n\n"
-                        f"Сумма: {amount} Stars\n"
-                        f"Плательщик: {chat_id}"
-                    ),
+                    "text": t(owner_id, "payment_received_wallet", amount=amount),
                 })
+                send_receipt_pdf(owner_id, amount, wallet_addr=owner_addr or "", payer_id=chat_id, charge_id=charge_id, fee=0)
         return
 
     text = message.get("text")
@@ -1419,6 +1406,122 @@ def handle_callback_query(callback):
 
 
 # ============================================================
+# PDF RECEIPT
+# ============================================================
+
+def generate_receipt_pdf(
+    user_id: int,
+    amount: int,
+    wallet_addr: str = "",
+    payer_id: int = 0,
+    charge_id: str = "",
+    fee: int = 0,
+) -> bytes:
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A5
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+
+    lang = get_lang(user_id)
+    is_ru = lang == "ru"
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A5, topMargin=15 * mm, bottomMargin=15 * mm,
+                           leftMargin=15 * mm, rightMargin=15 * mm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, alignment=TA_CENTER,
+                                textColor=colors.HexColor("#2aabee"), spaceAfter=10)
+    normal_style = styles["Normal"]
+    normal_style.fontSize = 11
+
+    elements = []
+
+    if is_ru:
+        elements.append(Paragraph("Квитанция об оплате", title_style))
+        elements.append(Spacer(1, 5 * mm))
+        elements.append(Paragraph("✅ Перевод зачислен моментально", normal_style))
+        elements.append(Spacer(1, 5 * mm))
+
+        rows = [
+            ["Дата", datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")],
+            ["Сумма", f"{amount} Stars"],
+            ["Комиссия", f"{fee} Stars"],
+            ["К зачислению", f"{amount - fee} Stars"],
+            ["Кошелёк", wallet_addr or "—"],
+            ["Плательщик", str(payer_id) if payer_id else "—"],
+            ["ID транзакции", charge_id or "—"],
+            ["Статус", "Зачислено моментально"],
+        ]
+    else:
+        elements.append(Paragraph("Payment Receipt", title_style))
+        elements.append(Spacer(1, 5 * mm))
+        elements.append(Paragraph("✅ Transfer credited instantly", normal_style))
+        elements.append(Spacer(1, 5 * mm))
+
+        rows = [
+            ["Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")],
+            ["Amount", f"{amount} Stars"],
+            ["Fee", f"{fee} Stars"],
+            ["To credit", f"{amount - fee} Stars"],
+            ["Wallet", wallet_addr or "—"],
+            ["Payer", str(payer_id) if payer_id else "—"],
+            ["Transaction ID", charge_id or "—"],
+            ["Status", "Credited instantly"],
+        ]
+
+    label_style = ParagraphStyle("Label", parent=normal_style, fontName="Helvetica-Bold", textColor=colors.HexColor("#666666"))
+    val_style = ParagraphStyle("Val", parent=normal_style, fontName="Helvetica")
+
+    data = [[Paragraph(r[0], label_style), Paragraph(r[1], val_style)] for r in rows]
+    table = Table(data, colWidths=[50 * mm, 70 * mm])
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.25, colors.HexColor("#e0e0e0")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 8 * mm))
+
+    footer_text = "Stars Bot — мгновенные переводы" if is_ru else "Stars Bot — instant transfers"
+    footer_style = ParagraphStyle("Footer", parent=normal_style, fontSize=9,
+                                   textColor=colors.HexColor("#999999"), alignment=TA_CENTER)
+    elements.append(Paragraph(footer_text, footer_style))
+
+    doc.build(elements)
+    return buf.getvalue()
+
+
+def send_document(chat_id, file_bytes, filename, caption=None):
+    import io
+    url = f"{API}/sendDocument"
+    files = {"document": (filename, io.BytesIO(file_bytes), "application/pdf")}
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+    try:
+        r = session.post(url, files=files, data=data, timeout=30)
+        return r.json()
+    except Exception as e:
+        print(f"sendDocument error: {e!r}")
+        return None
+
+
+def send_receipt_pdf(chat_id, amount, wallet_addr="", payer_id=0, charge_id="", fee=0):
+    try:
+        pdf = generate_receipt_pdf(chat_id, amount, wallet_addr, payer_id, charge_id, fee)
+        lang = get_lang(chat_id)
+        caption = "Квитанция об оплате" if lang == "ru" else "Payment receipt"
+        send_document(chat_id, pdf, "receipt.pdf", caption=caption)
+    except Exception as e:
+        print(f"send_receipt_pdf error: {e!r}")
+
+
+# ============================================================
 # ОСНОВНОЙ БОТ: SUCCESSFUL PAYMENT
 # ============================================================
 
@@ -1446,12 +1549,17 @@ def handle_successful_payment(message):
         add_pending_buy(chat_id)
         WAITING_FOR_TOKEN.add(chat_id)
         send_message(chat_id, t(chat_id, "wallet_buy_paid", amount=amount))
+        send_receipt_pdf(chat_id, amount, payer_id=chat_id, charge_id=charge_id, fee=0)
         return
 
-    if payload == "main_bot_payment":
-        send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
-    else:
-        send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
+    wallet_addr = ""
+    if payload.startswith("pay_"):
+        check = get_check(payload)
+        if check:
+            wallet_addr = check.get("wallet", "")
+
+    send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
+    send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
 
 
 # ============================================================
