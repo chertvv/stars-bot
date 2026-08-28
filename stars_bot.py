@@ -38,6 +38,8 @@ MAX_AMOUNT = 10000
 WALLET_PRICE = 50
 MAX_WALLETS = 2
 
+PENDING_BUYS_FILE = Path(__file__).parent / "pending_buys.json"
+
 WALLETS_FILE = Path(__file__).parent / "wallets.json"
 CHECKS_FILE = Path(__file__).parent / "checks.json"
 GIFTS_FILE = Path(__file__).parent / "gifts.json"
@@ -53,6 +55,46 @@ SEND_ERROR_COUNT: dict[int, int] = {}
 WAITING_RENAME: dict[int, str] = {}
 WAITING_WALLET_BUY: set[int] = set()
 user_bot_threads: dict[int, threading.Thread] = {}
+
+
+def load_pending_buys() -> dict:
+    if PENDING_BUYS_FILE.exists():
+        try:
+            return json.loads(PENDING_BUYS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_pending_buys(data: dict) -> None:
+    try:
+        PENDING_BUYS_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"save_pending_buys error: {e!r}")
+
+
+def add_pending_buy(user_id: int) -> None:
+    data = load_pending_buys()
+    data[str(user_id)] = int(time.time())
+    save_pending_buys(data)
+    WAITING_WALLET_BUY.add(user_id)
+
+
+def has_pending_buy(user_id: int) -> bool:
+    if user_id in WAITING_WALLET_BUY:
+        return True
+    data = load_pending_buys()
+    return str(user_id) in data
+
+
+def remove_pending_buy(user_id: int) -> None:
+    WAITING_WALLET_BUY.discard(user_id)
+    data = load_pending_buys()
+    data.pop(str(user_id), None)
+    save_pending_buys(data)
 user_bot_stop_flags: dict[int, threading.Event] = {}
 
 BOT_USERNAME = "bot"
@@ -1103,8 +1145,10 @@ def handle_callback_query(callback):
     if data.startswith("inline_pay_"):
         amount = int(data[len("inline_pay_"):])
         answer_callback(callback_id)
+        from_user = callback.get("from") or {}
+        user_id = from_user.get("id", chat_id)
         result = telegram("sendInvoice", {
-            "chat_id": chat_id,
+            "chat_id": user_id,
             "title": f"Оплата {amount} Stars",
             "description": f"Оплата на сумму {amount} Stars",
             "payload": "main_bot_payment",
@@ -1113,7 +1157,7 @@ def handle_callback_query(callback):
         })
         if not isinstance(result, dict) or result.get("ok") is not True:
             desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+            send_message(user_id, f"Не удалось создать счёт.\n\n{desc}")
         return
 
     if data == "create_bot":
@@ -1197,7 +1241,7 @@ def handle_successful_payment(message):
     print(f"PAYMENT: user={chat_id} amount={amount} payload={payload} charge={charge_id}")
 
     if payload == "wallet_buy":
-        WAITING_WALLET_BUY.add(chat_id)
+        add_pending_buy(chat_id)
         WAITING_FOR_TOKEN.add(chat_id)
         send_message(chat_id, (
             f"✅ Оплата {amount} Stars получена!\n\n"
@@ -1340,7 +1384,7 @@ def handle_message(message):
 
             # Проверяем лимит кошельков
             user_wallets = get_user_wallets(chat_id)
-            is_buy = chat_id in WAITING_WALLET_BUY
+            is_buy = has_pending_buy(chat_id)
             if len(user_wallets) >= MAX_WALLETS and not is_buy:
                 send_message(chat_id, (
                     f"Лимит кошельков ({MAX_WALLETS}) достигнут.\n\n"
@@ -1380,7 +1424,7 @@ def handle_message(message):
                 "created": int(time.time()),
             }
             save_wallets(wallets)
-            WAITING_WALLET_BUY.discard(chat_id)
+            remove_pending_buy(chat_id)
 
             # Если активирован подарок — просим имя
             if chat_id in WAITING_RENAME:
