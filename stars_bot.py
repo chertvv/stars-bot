@@ -806,12 +806,10 @@ def user_bot_handle_message(base_url, token, message):
                 mark_check_paid(code, chat_id)
                 wallet_addr = check.get("wallet", "")
                 from_id = check.get("from", 0)
-                charge_id = payment.get("telegram_payment_charge_id", "")
                 user_bot_api(base_url, token, "sendMessage", {
                     "chat_id": chat_id,
                     "text": t(chat_id, "payment_received_wallet", amount=amount),
                 })
-                send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
                 wallets = load_wallets()
                 wallet_info = wallets.get(wallet_addr, {})
                 owner_id = wallet_info.get("owner", 0)
@@ -820,7 +818,6 @@ def user_bot_handle_message(base_url, token, message):
                         "chat_id": owner_id,
                         "text": t(owner_id, "payment_received_wallet", amount=amount),
                     })
-                    send_receipt_pdf(owner_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
             else:
                 user_bot_api(base_url, token, "sendMessage", {
                     "chat_id": chat_id,
@@ -1422,8 +1419,21 @@ def generate_receipt_pdf(
     from reportlab.lib.pagesizes import A5
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", font_path))
+        pdfmetrics.registerFont(TTFont("DejaVu-Bold", bold_path))
+        base_font = "DejaVu"
+        bold_font = "DejaVu-Bold"
+    except Exception:
+        base_font = "Helvetica"
+        bold_font = "Helvetica-Bold"
 
     lang = get_lang(user_id)
     is_ru = lang == "ru"
@@ -1431,22 +1441,20 @@ def generate_receipt_pdf(
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A5, topMargin=15 * mm, bottomMargin=15 * mm,
                            leftMargin=15 * mm, rightMargin=15 * mm)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, alignment=TA_CENTER,
+    title_style = ParagraphStyle("Title", fontName=bold_font, fontSize=18, alignment=TA_CENTER,
                                 textColor=colors.HexColor("#2aabee"), spaceAfter=10)
-    normal_style = styles["Normal"]
-    normal_style.fontSize = 11
+    normal_style = ParagraphStyle("Normal", fontName=base_font, fontSize=11, leading=16)
 
     elements = []
 
     if is_ru:
         elements.append(Paragraph("Квитанция об оплате", title_style))
         elements.append(Spacer(1, 5 * mm))
-        elements.append(Paragraph("✅ Перевод зачислен моментально", normal_style))
+        elements.append(Paragraph("Перевод зачислен моментально", normal_style))
         elements.append(Spacer(1, 5 * mm))
 
         rows = [
-            ["Дата", datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")],
+            ["Дата", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")],
             ["Сумма", f"{amount} Stars"],
             ["Комиссия", f"{fee} Stars"],
             ["К зачислению", f"{amount - fee} Stars"],
@@ -1458,11 +1466,11 @@ def generate_receipt_pdf(
     else:
         elements.append(Paragraph("Payment Receipt", title_style))
         elements.append(Spacer(1, 5 * mm))
-        elements.append(Paragraph("✅ Transfer credited instantly", normal_style))
+        elements.append(Paragraph("Transfer credited instantly", normal_style))
         elements.append(Spacer(1, 5 * mm))
 
         rows = [
-            ["Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")],
+            ["Date", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")],
             ["Amount", f"{amount} Stars"],
             ["Fee", f"{fee} Stars"],
             ["To credit", f"{amount - fee} Stars"],
@@ -1472,8 +1480,9 @@ def generate_receipt_pdf(
             ["Status", "Credited instantly"],
         ]
 
-    label_style = ParagraphStyle("Label", parent=normal_style, fontName="Helvetica-Bold", textColor=colors.HexColor("#666666"))
-    val_style = ParagraphStyle("Val", parent=normal_style, fontName="Helvetica")
+    label_style = ParagraphStyle("Label", fontName=bold_font, fontSize=11,
+                                 textColor=colors.HexColor("#666666"), leading=16)
+    val_style = ParagraphStyle("Val", fontName=base_font, fontSize=11, leading=16)
 
     data = [[Paragraph(r[0], label_style), Paragraph(r[1], val_style)] for r in rows]
     table = Table(data, colWidths=[50 * mm, 70 * mm])
@@ -1552,14 +1561,17 @@ def handle_successful_payment(message):
         send_receipt_pdf(chat_id, amount, payer_id=chat_id, charge_id=charge_id, fee=0)
         return
 
-    wallet_addr = ""
     if payload.startswith("pay_"):
+        wallet_addr = ""
         check = get_check(payload)
         if check:
             wallet_addr = check.get("wallet", "")
+        send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
+        send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
+        return
 
     send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
-    send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
+    send_receipt_pdf(chat_id, amount, payer_id=chat_id, charge_id=charge_id, fee=0)
 
 
 # ============================================================
