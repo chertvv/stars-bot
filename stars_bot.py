@@ -1100,6 +1100,22 @@ def handle_callback_query(callback):
         handle_wallet_callback(callback_id, chat_id, data)
         return
 
+    if data.startswith("inline_pay_"):
+        amount = int(data[len("inline_pay_"):])
+        answer_callback(callback_id)
+        result = telegram("sendInvoice", {
+            "chat_id": chat_id,
+            "title": f"Оплата {amount} Stars",
+            "description": f"Оплата на сумму {amount} Stars",
+            "payload": "main_bot_payment",
+            "currency": "XTR",
+            "prices": [{"label": f"{amount} Stars", "amount": amount}],
+        })
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
+            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+        return
+
     if data == "create_bot":
         answer_callback(callback_id)
         WAITING_FOR_TOKEN.add(chat_id)
@@ -2114,6 +2130,109 @@ def answer_pre_checkout(query):
 
 
 # ============================================================
+# ОСНОВНОЙ БОТ: INLINE QUERY
+# ============================================================
+
+def handle_inline_query_main(inline_query):
+    if not isinstance(inline_query, dict):
+        return
+    query_id = inline_query.get("id")
+    if not query_id:
+        return
+    query = inline_query.get("query", "")
+    if not isinstance(query, str):
+        query = ""
+    query = query.strip()
+
+    if not query:
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": [{
+                "type": "article",
+                "id": "help",
+                "title": "Создать счёт на оплату",
+                "description": "Введите сумму, например: 10",
+                "input_message_content": {
+                    "message_text": "Напишите сумму после имени бота.\n\nПример:\n@kise 10",
+                },
+            }],
+            "cache_time": 1,
+            "is_personal": True,
+        })
+        return
+
+    match = re.fullmatch(r"(\d+)(?:\s*(?:stars?|xtr))?", query, re.IGNORECASE)
+    if not match:
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": [{
+                "type": "article",
+                "id": "invalid",
+                "title": "Неверная сумма",
+                "description": "Например: @kise 10",
+                "input_message_content": {
+                    "message_text": "Неверная сумма.\n\nПример:\n@kise 10",
+                },
+            }],
+            "cache_time": 1,
+            "is_personal": True,
+        })
+        return
+
+    amount = int(match.group(1))
+    if amount < MIN_AMOUNT:
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": [{
+                "type": "article",
+                "id": "err_min",
+                "title": "Сумма слишком маленькая",
+                "description": f"Минимум — {MIN_AMOUNT} Stars",
+                "input_message_content": {"message_text": f"Минимум — {MIN_AMOUNT} Stars"},
+            }],
+            "cache_time": 1,
+            "is_personal": True,
+        })
+        return
+    if amount > MAX_AMOUNT:
+        telegram("answerInlineQuery", {
+            "inline_query_id": query_id,
+            "results": [{
+                "type": "article",
+                "id": "err_max",
+                "title": "Сумма слишком большая",
+                "description": f"Максимум — {MAX_AMOUNT} Stars",
+                "input_message_content": {"message_text": f"Максимум — {MAX_AMOUNT} Stars"},
+            }],
+            "cache_time": 1,
+            "is_personal": True,
+        })
+        return
+
+    result = {
+        "type": "article",
+        "id": secrets.token_hex(8),
+        "title": f"Счёт на {amount} Stars",
+        "description": f"Отправить счёт на {amount} Stars",
+        "input_message_content": {
+            "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\n\nНажмите кнопку ниже для оплаты:",
+        },
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": f"Оплатить {amount} Stars", "callback_data": f"inline_pay_{amount}"},
+            ]],
+        },
+    }
+
+    telegram("answerInlineQuery", {
+        "inline_query_id": query_id,
+        "results": [result],
+        "cache_time": 1,
+        "is_personal": True,
+    })
+
+
+# ============================================================
 # ОСНОВНОЙ БОТ: HANDLE UPDATE
 # ============================================================
 
@@ -2132,11 +2251,7 @@ def handle_update(update):
     inline_query = update.get("inline_query")
     if isinstance(inline_query, dict):
         try:
-            telegram("answerInlineQuery", {
-                "inline_query_id": inline_query.get("id"),
-                "results": [],
-                "cache_time": 1,
-            })
+            handle_inline_query_main(inline_query)
         except Exception as e:
             print(f"Inline error: {e!r}")
         return
