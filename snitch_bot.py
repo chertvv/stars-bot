@@ -34,7 +34,10 @@ session = requests.Session()
 
 def telegram(method, data=None, timeout=15):
     try:
-        r = session.post(f"{API}/{method}", json=data or {}, timeout=timeout)
+        if data:
+            r = session.post(f"{API}/{method}", data=data, timeout=timeout)
+        else:
+            r = session.post(f"{API}/{method}", timeout=timeout)
         r.raise_for_status()
         if not r.text:
             return None
@@ -54,17 +57,6 @@ def forward_message(chat_id, from_chat_id, message_id):
         "from_chat_id": from_chat_id,
         "message_id": message_id,
     })
-
-
-def get_file(file_id):
-    return telegram("getFile", {"file_id": file_id})
-
-
-def send_photo_by_id(chat_id, file_id, caption=None):
-    data = {"chat_id": chat_id, "photo": file_id}
-    if caption:
-        data["caption"] = caption
-    return telegram("sendPhoto", data)
 
 
 # ============================================================
@@ -275,9 +267,9 @@ def process_update(update: dict):
 
 
 def main():
-    print("=" * 40)
-    print("SNITCH BOT")
-    print("=" * 40)
+    print("=" * 40, flush=True)
+    print("SNITCH BOT", flush=True)
+    print("=" * 40, flush=True)
 
     result = telegram("getMe", timeout=10)
     if not isinstance(result, dict) or result.get("ok") is not True:
@@ -286,9 +278,9 @@ def main():
 
     bot = result.get("result", {})
     username = bot.get("username", "unknown")
-    print(f"Bot: @{username}")
-    print(f"Admin: {ADMIN_ID}")
-    print()
+    print(f"Bot: @{username}", flush=True)
+    print(f"Admin: {ADMIN_ID}", flush=True)
+    print(flush=True)
 
     send_message(ADMIN_ID, f"👁 Snitch Bot @{username} запущен")
 
@@ -299,13 +291,6 @@ def main():
             result = telegram("getUpdates", {
                 "offset": offset,
                 "timeout": 5,
-                "allowed_updates": [
-                    "message",
-                    "edited_message",
-                    "edited_channel_post",
-                    "channel_post",
-                    "deleted_messages",
-                ],
             }, timeout=15)
 
             if result is None:
