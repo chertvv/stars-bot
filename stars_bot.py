@@ -39,6 +39,7 @@ WALLET_PRICE = 50
 MAX_WALLETS = 2
 
 PENDING_BUYS_FILE = Path(__file__).parent / "pending_buys.json"
+LANG_FILE = Path(__file__).parent / "lang.json"
 
 WALLETS_FILE = Path(__file__).parent / "wallets.json"
 CHECKS_FILE = Path(__file__).parent / "checks.json"
@@ -95,9 +96,253 @@ def remove_pending_buy(user_id: int) -> None:
     data = load_pending_buys()
     data.pop(str(user_id), None)
     save_pending_buys(data)
+
 user_bot_stop_flags: dict[int, threading.Event] = {}
 
 BOT_USERNAME = "bot"
+
+
+# ============================================================
+# I18N / LANGUAGES
+# ============================================================
+
+def load_langs() -> dict:
+    if LANG_FILE.exists():
+        try:
+            return json.loads(LANG_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_langs(data: dict) -> None:
+    try:
+        LANG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        print(f"save_langs error: {e!r}")
+
+
+def get_lang(user_id: int) -> str:
+    langs = load_langs()
+    return langs.get(str(user_id), "ru")
+
+
+def set_lang(user_id: int, lang: str) -> None:
+    langs = load_langs()
+    langs[str(user_id)] = lang
+    save_langs(langs)
+
+
+def t(user_id: int, key: str, **kwargs) -> str:
+    lang = get_lang(user_id)
+    tr = TRANSLATIONS.get(lang, TRANSLATIONS["ru"])
+    text = tr.get(key, TRANSLATIONS["ru"].get(key, key))
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except (KeyError, IndexError):
+            pass
+    return text
+
+
+TRANSLATIONS = {
+    "ru": {
+        "banned": "Вы забанены.",
+        "banned_reason": "Вы забанены.\nПричина: {reason}",
+        "no_wallets": "У вас нет кошельков.",
+        "no_wallet_create": "У вас нет кошелька. Создайте: /start",
+        "wallet_not_found": "Кошелёк {target} не найден.",
+        "wallet_not_found_short": "Кошелёк не найден.",
+        "link_invalid": "Ссылка недействительна.",
+        "link_used": "Эта ссылка уже использована.",
+        "token_invalid": "Токен невалиден. Попробуйте снова: /start",
+        "token_format": "Неверный формат токена.\nФормат: 123456789:AA...\n\nПопробуйте снова: /start",
+        "token_prompt": "Отправьте токен вашего бота.\nФормат: 123456789:AA...\n\nПолучить токен можно у @BotFather -> /newbot",
+        "token_looks": "Это похоже на токен, а не имя.\nВведите имя для кошелька (или /cancel):",
+        "wallet_created": "Кошелёк создан!\n\nАдрес: {address}\nБот: @{bot}\n\nОтправка средств:\n/send {address} СУММА\n\nНапример:\n/send {address} 100",
+        "wallet_created_rename": "Кошелёк создан!\n\nАдрес: {address}\nБот: @{bot}\n\nПодарок: введите имя для кошелька\n(или /cancel для пропуска):",
+        "wallet_limit": "Лимит кошельков ({max}) достигнут.\n\nУправление: /wallet",
+        "wallet_second_paid": "Первый кошелёк — бесплатно, второй — {price} Stars.\n\nИспользуйте /wallet → Купить",
+        "wallet_buy_paid": "✅ Оплата {amount} Stars получена!\n\nТеперь отправьте токен бота для создания кошелька.\nФормат: 123456789:AA...\n\nПолучить токен: @BotFather -> /newbot",
+        "wallet_deleted": "🗑 Кошелёк {addr} удалён.",
+        "wallet_recreated": "✅ Адрес пересоздан!\n\nСтарый: {old}\nНовый: {new}\nБот: @{bot}\n\nОтправка: /send {new} СУММА",
+        "wallet_cant_delete_one": "Нельзя удалить единственный кошелёк.",
+        "wallet_select_recreate": "Выберите кошелёк для пересоздания:",
+        "wallet_select_delete": "Выберите кошелёк для удаления:",
+        "wallet_limit_reached": "Лимит кошельков ({max}) достигнут.",
+        "invoice_failed": "Не удалось создать счёт.\n\n{desc}",
+        "payment_received": "Оплата {amount} {currency} получена!",
+        "payment_received_wallet": "Оплата {amount} Stars получена!",
+        "send_link_created": "Ссылка для оплаты создана!\n\nКошелёк: {display}\nБот: @{bot}\nСумма: {amount} Stars\n\nСсылка:\n{link}\n\nОтправьте её получателю для оплаты.\nБот активен 5 минут для приёма оплаты.",
+        "send_enter_amount": "Введите сумму в Stars (число):",
+        "send_amount_invalid": "Введите число — сумму в Stars:",
+        "send_too_many_errors": "Слишком много ошибок. Начните заново: /send АДРЕС СУММА",
+        "send_amount_range": "Сумма от {min} до {max}. Начните заново: /send АДРЕС СУММА",
+        "send_amount_range_retry": "Сумма от {min} до {max} Stars. Попробуйте снова:",
+        "send_amount_range_short": "Сумма от {min} до {max} Stars",
+        "send_amount_zero": "Сумма должна быть больше 0",
+        "send_amount_max": "Максимальная сумма — {max} Stars",
+        "rename_cancel": "Ок. Имя не изменено.",
+        "rename_done": "Имя кошелька изменено!\n\nАдрес: {address}\nИмя: {name}\n\n/send {name} СУММА",
+        "promo_invalid": "Промокод недействителен или уже использован.",
+        "gift_invalid": "Ссылка недействительна или уже использована.",
+        "gift_activated": "🎁 Подарок активирован!\n",
+        "gift_rename_bonus": "✨ Бонус: смена имени кошелька",
+        "gift_rename_prompt": "\nВведите новое имя (или /cancel):",
+        "gift_no_wallet": "\nСоздайте кошелёк: /start",
+        "gift_tg_sent": "✅ Telegram Gift отправлен вам!",
+        "gift_tg_failed": "⚠️ Не удалось отправить Gift",
+        "gift_item": "Предмет: {title}",
+        "promo_activated": "🎟 Промокод {code} активирован!\n",
+        "promo_rename_prompt": "\nОтправьте токен бота для создания кошелька.",
+        "no_wallets_list": "Нет кошельков.",
+        "no_promos": "Нет промокодов.",
+        "no_gifts": "Нет подарков.",
+        "back": "← Назад",
+        "help_title": "Помощь",
+        "help_wallet": "Кошелёк:\n  /start — создать кошелёк\n  /wallet — меню кошельков\n  /my — мой кошелёк",
+        "help_payment": "Оплата:\n  /send АДРЕС СУММА — ссылка на оплату\n  /pay 100 — оплата через бота\n  @bot 10 — inline-счёт",
+        "help_promo": "Промокоды:\n  /redeem КОД — активировать промокод",
+        "lang_select": "Выберите язык / Select language",
+        "lang_set": "✅ Язык установлен: Русский",
+        "start_greeting": "Привет!\n\nСоздайте кошелёк для приёма оплаты Stars.\nНажмите кнопку ниже и введите токен бота.",
+        "start_create": "Создать кошелёк",
+        "start_help": "Помощь",
+        "my_wallet": "Ваш кошелёк: {addr}{name}\nБот: @{bot}\n\nОтправка средств:\n/send {addr} СУММА",
+        "wallet_menu_title": "💼 Мои кошельки ({count}/{max})\n",
+        "wallet_menu_list": "📋 Мои адреса",
+        "wallet_menu_stats": "📊 Статистика",
+        "wallet_menu_recreate": "🔄 Пересоздать",
+        "wallet_menu_delete": "🗑 Удалить",
+        "wallet_menu_buy": "🛒 Купить ({price} Stars)",
+        "wallet_menu_limit": "🛕 Лимит достигнут",
+        "wallet_menu_help": "❓ Помощь",
+        "wallet_list_title": "📋 Ваши кошельки ({count}/{max})\n",
+        "wallet_list_item": "Адрес: {addr}{name}\nБот: @{bot}\nОтправка: /send {addr} СУММА\n",
+        "wallet_stats_title": "📊 Статистика\n",
+        "wallet_stats_item": "{addr}{name}\n  Получено: {received} Stars ({count} оплат)\n",
+        "wallet_help_text": "💼 Управление кошельками\n\nПервый кошелёк — бесплатно\nВторой — {price} Stars\nЛимит: {max} кошелька\n\nКоманды:\n  /wallet — это меню\n  /start — создать кошелёк\n  /my — показать кошелёк\n  /send АДРЕС СУММА — оплата",
+        "inline_help": "Напишите сумму после имени бота.\n\nПример:\n@kise 10",
+        "inline_help_title": "Создать счёт на оплату",
+        "inline_help_desc": "Введите сумму, например: 10",
+        "inline_invalid_title": "Неверная сумма",
+        "inline_invalid_desc": "Например: @kise 10",
+        "inline_invalid_text": "Неверная сумма.\n\nПример:\n@kise 10",
+        "inline_min_title": "Сумма слишком маленькая",
+        "inline_min_desc": "Минимум — {min} Stars",
+        "inline_max_title": "Сумма слишком большая",
+        "inline_max_desc": "Максимум — {max} Stars",
+        "inline_no_wallet_title": "У вас нет кошелька",
+        "inline_no_wallet_desc": "Создайте кошелёк: /start у @kise",
+        "inline_no_wallet_text": "У вас нет кошелька.\n\nСоздайте: /start у @kise",
+        "inline_article_title": "Счёт на {amount} Stars",
+        "inline_article_desc": "Оплата на @{bot}",
+        "inline_article_text": "💰 Счёт на оплату\n\nСумма: {amount} Stars\nКошелёк: {display}\n\nНажмите кнопку для оплаты:",
+        "inline_pay_btn": "Оплатить {amount} Stars",
+        "invoice_title": "Оплата {amount} Stars",
+        "invoice_desc": "Оплата на сумму {amount} Stars",
+        "invoice_buy_title": "Покупка кошелька ({price} Stars)",
+        "invoice_buy_desc": "2-й кошелёк. Максимум {max} на пользователя.",
+    },
+    "en": {
+        "banned": "You are banned.",
+        "banned_reason": "You are banned.\nReason: {reason}",
+        "no_wallets": "You have no wallets.",
+        "no_wallet_create": "You have no wallet. Create one: /start",
+        "wallet_not_found": "Wallet {target} not found.",
+        "wallet_not_found_short": "Wallet not found.",
+        "link_invalid": "Link is invalid.",
+        "link_used": "This link has already been used.",
+        "token_invalid": "Invalid token. Try again: /start",
+        "token_format": "Invalid token format.\nFormat: 123456789:AA...\n\nTry again: /start",
+        "token_prompt": "Send your bot token.\nFormat: 123456789:AA...\n\nGet token from @BotFather -> /newbot",
+        "token_looks": "This looks like a token, not a name.\nEnter a name for the wallet (or /cancel):",
+        "wallet_created": "Wallet created!\n\nAddress: {address}\nBot: @{bot}\n\nSending funds:\n/send {address} AMOUNT\n\nExample:\n/send {address} 100",
+        "wallet_created_rename": "Wallet created!\n\nAddress: {address}\nBot: @{bot}\n\nGift: enter a name for the wallet\n(or /cancel to skip):",
+        "wallet_limit": "Wallet limit ({max}) reached.\n\nManage: /wallet",
+        "wallet_second_paid": "First wallet is free, second costs {price} Stars.\n\nUse /wallet → Buy",
+        "wallet_buy_paid": "✅ Payment of {amount} Stars received!\n\nNow send the bot token to create a wallet.\nFormat: 123456789:AA...\n\nGet token: @BotFather -> /newbot",
+        "wallet_deleted": "🗑 Wallet {addr} deleted.",
+        "wallet_recreated": "✅ Address recreated!\n\nOld: {old}\nNew: {new}\nBot: @{bot}\n\nSend: /send {new} AMOUNT",
+        "wallet_cant_delete_one": "Cannot delete your only wallet.",
+        "wallet_select_recreate": "Select a wallet to recreate:",
+        "wallet_select_delete": "Select a wallet to delete:",
+        "wallet_limit_reached": "Wallet limit ({max}) reached.",
+        "invoice_failed": "Failed to create invoice.\n\n{desc}",
+        "payment_received": "Payment of {amount} {currency} received!",
+        "payment_received_wallet": "Payment of {amount} Stars received!",
+        "send_link_created": "Payment link created!\n\nWallet: {display}\nBot: @{bot}\nAmount: {amount} Stars\n\nLink:\n{link}\n\nSend it to the payer.\nBot is active for 5 minutes to accept payment.",
+        "send_enter_amount": "Enter the amount in Stars (number):",
+        "send_amount_invalid": "Enter a number — amount in Stars:",
+        "send_too_many_errors": "Too many errors. Start over: /send ADDRESS AMOUNT",
+        "send_amount_range": "Amount from {min} to {max}. Start over: /send ADDRESS AMOUNT",
+        "send_amount_range_retry": "Amount from {min} to {max} Stars. Try again:",
+        "send_amount_range_short": "Amount from {min} to {max} Stars",
+        "send_amount_zero": "Amount must be greater than 0",
+        "send_amount_max": "Maximum amount — {max} Stars",
+        "rename_cancel": "Ok. Name not changed.",
+        "rename_done": "Wallet name changed!\n\nAddress: {address}\nName: {name}\n\n/send {name} AMOUNT",
+        "promo_invalid": "Promo code is invalid or already used.",
+        "gift_invalid": "Link is invalid or already used.",
+        "gift_activated": "🎁 Gift activated!\n",
+        "gift_rename_bonus": "✨ Bonus: wallet name change",
+        "gift_rename_prompt": "\nEnter a new name (or /cancel):",
+        "gift_no_wallet": "\nCreate a wallet: /start",
+        "gift_tg_sent": "✅ Telegram Gift sent to you!",
+        "gift_tg_failed": "⚠️ Failed to send Gift",
+        "gift_item": "Item: {title}",
+        "promo_activated": "🎟 Promo code {code} activated!\n",
+        "promo_rename_prompt": "\nSend the bot token to create a wallet.",
+        "no_wallets_list": "No wallets.",
+        "no_promos": "No promo codes.",
+        "no_gifts": "No gifts.",
+        "back": "← Back",
+        "help_title": "Help",
+        "help_wallet": "Wallet:\n  /start — create wallet\n  /wallet — wallet menu\n  /my — my wallet",
+        "help_payment": "Payment:\n  /send ADDRESS AMOUNT — payment link\n  /pay 100 — pay via bot\n  @bot 10 — inline invoice",
+        "help_promo": "Promo codes:\n  /redeem CODE — activate promo code",
+        "lang_select": "Select language / Выберите язык",
+        "lang_set": "✅ Language set: English",
+        "start_greeting": "Hello!\n\nCreate a wallet to accept Stars payments.\nClick the button below and enter your bot token.",
+        "start_create": "Create wallet",
+        "start_help": "Help",
+        "my_wallet": "Your wallet: {addr}{name}\nBot: @{bot}\n\nSending funds:\n/send {addr} AMOUNT",
+        "wallet_menu_title": "💼 My wallets ({count}/{max})\n",
+        "wallet_menu_list": "📋 My addresses",
+        "wallet_menu_stats": "📊 Statistics",
+        "wallet_menu_recreate": "🔄 Recreate",
+        "wallet_menu_delete": "🗑 Delete",
+        "wallet_menu_buy": "🛒 Buy ({price} Stars)",
+        "wallet_menu_limit": "🛕 Limit reached",
+        "wallet_menu_help": "❓ Help",
+        "wallet_list_title": "📋 Your wallets ({count}/{max})\n",
+        "wallet_list_item": "Address: {addr}{name}\nBot: @{bot}\nSend: /send {addr} AMOUNT\n",
+        "wallet_stats_title": "📊 Statistics\n",
+        "wallet_stats_item": "{addr}{name}\n  Received: {received} Stars ({count} payments)\n",
+        "wallet_help_text": "💼 Wallet management\n\nFirst wallet — free\nSecond — {price} Stars\nLimit: {max} wallets\n\nCommands:\n  /wallet — this menu\n  /start — create wallet\n  /my — show wallet\n  /send ADDRESS AMOUNT — payment",
+        "inline_help": "Type the amount after the bot name.\n\nExample:\n@kise 10",
+        "inline_help_title": "Create payment invoice",
+        "inline_help_desc": "Enter amount, e.g.: 10",
+        "inline_invalid_title": "Invalid amount",
+        "inline_invalid_desc": "Example: @kise 10",
+        "inline_invalid_text": "Invalid amount.\n\nExample:\n@kise 10",
+        "inline_min_title": "Amount too small",
+        "inline_min_desc": "Minimum — {min} Stars",
+        "inline_max_title": "Amount too large",
+        "inline_max_desc": "Maximum — {max} Stars",
+        "inline_no_wallet_title": "You have no wallet",
+        "inline_no_wallet_desc": "Create a wallet: /start at @kise",
+        "inline_no_wallet_text": "You have no wallet.\n\nCreate one: /start at @kise",
+        "inline_article_title": "Invoice for {amount} Stars",
+        "inline_article_desc": "Payment to @{bot}",
+        "inline_article_text": "💰 Payment invoice\n\nAmount: {amount} Stars\nWallet: {display}\n\nClick the button below to pay:",
+        "inline_pay_btn": "Pay {amount} Stars",
+        "invoice_title": "Payment {amount} Stars",
+        "invoice_desc": "Payment of {amount} Stars",
+        "invoice_buy_title": "Buy wallet ({price} Stars)",
+        "invoice_buy_desc": "2nd wallet. Maximum {max} per user.",
+    },
+}
 
 
 # ============================================================
@@ -911,13 +1156,10 @@ def show_wallet_menu(chat_id: int):
     count = len(user_wallets)
 
     if count == 0:
-        send_message(chat_id, (
-            "У вас нет кошельков.\n\n"
-            "Создайте первый: /start"
-        ))
+        send_message(chat_id, t(chat_id, "no_wallet_create"))
         return
 
-    lines = [f"💼 Мои кошельки ({count}/{MAX_WALLETS})\n"]
+    lines = [t(chat_id, "wallet_menu_title", count=count, max=MAX_WALLETS)]
     for addr, info in user_wallets:
         name = info.get("name", "")
         name_str = f" ({name})" if name else ""
@@ -926,22 +1168,26 @@ def show_wallet_menu(chat_id: int):
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "📋 Мои адреса", "callback_data": "wallet_list"},
-                {"text": "📊 Статистика", "callback_data": "wallet_stats"},
+                {"text": t(chat_id, "wallet_menu_list"), "callback_data": "wallet_list"},
+                {"text": t(chat_id, "wallet_menu_stats"), "callback_data": "wallet_stats"},
             ],
             [
-                {"text": "🔄 Пересоздать", "callback_data": "wallet_recreate"},
-                {"text": "🗑 Удалить", "callback_data": "wallet_delete"},
+                {"text": t(chat_id, "wallet_menu_recreate"), "callback_data": "wallet_recreate"},
+                {"text": t(chat_id, "wallet_menu_delete"), "callback_data": "wallet_delete"},
             ],
         ]
     }
 
+    if count < MAX_WALLETS:
+        keyboard["inline_keyboard"].append([
+            {"text": t(chat_id, "wallet_menu_buy", price=WALLET_PRICE), "callback_data": "wallet_buy"},
+        ])
+    else:
+        keyboard["inline_keyboard"].append([
+            {"text": t(chat_id, "wallet_menu_limit"), "callback_data": "wallet_nope"},
+        ])
     keyboard["inline_keyboard"].append([
-        {"text": "🛒 Купить" if count < MAX_WALLETS else "🛕 Лимит достигнут",
-         "callback_data": "wallet_buy" if count < MAX_WALLETS else "wallet_nope"},
-    ])
-    keyboard["inline_keyboard"].append([
-        {"text": "❓ Помощь", "callback_data": "wallet_help"},
+        {"text": t(chat_id, "wallet_menu_help"), "callback_data": "wallet_help"},
     ])
 
     send_message(chat_id, "\n".join(lines), reply_markup=keyboard)
@@ -957,42 +1203,37 @@ def handle_wallet_callback(callback_id, chat_id, data):
     if data == "wallet_list":
         user_wallets = get_user_wallets(chat_id)
         if not user_wallets:
-            send_message(chat_id, "У вас нет кошельков.")
+            send_message(chat_id, t(chat_id, "no_wallets"))
             return
-        lines = [f"📋 Ваши кошельки ({len(user_wallets)}/{MAX_WALLETS})\n"]
+        lines = [t(chat_id, "wallet_list_title", count=len(user_wallets), max=MAX_WALLETS)]
         for addr, info in user_wallets:
             name = info.get("name", "")
             name_str = f" ({name})" if name else ""
-            lines.append(f"Адрес: {addr}{name_str}")
-            lines.append(f"Бот: @{info.get('username', '?')}")
-            lines.append(f"Отправка: /send {addr} СУММА")
-            lines.append("")
+            lines.append(t(chat_id, "wallet_list_item", addr=addr, name=name_str, bot=info.get("username", "?")))
         send_message(chat_id, "\n".join(lines))
         return
 
     if data == "wallet_stats":
         user_wallets = get_user_wallets(chat_id)
         if not user_wallets:
-            send_message(chat_id, "У вас нет кошельков.")
+            send_message(chat_id, t(chat_id, "no_wallets"))
             return
         checks = load_checks()
         user_addrs = {a for a, _ in user_wallets}
-        lines = ["📊 Статистика\n"]
+        lines = [t(chat_id, "wallet_stats_title")]
         for addr, info in user_wallets:
             name = info.get("name", "")
             name_str = f" ({name})" if name else ""
             as_receiver = [c for c in checks.values() if c.get("wallet") == addr and c.get("paid")]
             received = sum(c.get("amount", 0) for c in as_receiver)
-            lines.append(f"{addr}{name_str}")
-            lines.append(f"  Получено: {received} Stars ({len(as_receiver)} оплат)")
-            lines.append("")
+            lines.append(t(chat_id, "wallet_stats_item", addr=addr, name=name_str, received=received, count=len(as_receiver)))
         send_message(chat_id, "\n".join(lines))
         return
 
     if data == "wallet_recreate":
         user_wallets = get_user_wallets(chat_id)
         if not user_wallets:
-            send_message(chat_id, "У вас нет кошельков.")
+            send_message(chat_id, t(chat_id, "no_wallets"))
             return
         if len(user_wallets) == 1:
             addr, info = user_wallets[0]
@@ -1008,19 +1249,13 @@ def handle_wallet_callback(callback_id, chat_id, data):
             }
             del wallets[addr]
             save_wallets(wallets)
-            send_message(chat_id, (
-                f"✅ Адрес пересоздан!\n\n"
-                f"Старый: {addr}\n"
-                f"Новый: {new_addr}\n"
-                f"Бот: @{info['username']}\n\n"
-                f"Отправка: /send {new_addr} СУММА"
-            ))
+            send_message(chat_id, t(chat_id, "wallet_recreated", old=addr, new=new_addr, bot=info["username"]))
         else:
             keyboard = {"inline_keyboard": [[
                 {"text": f"{a}", "callback_data": f"wallet_recreate_{a}"}
                 for a, _ in user_wallets
-            ], [{"text": "← Назад", "callback_data": "wallet_menu"}]]}
-            send_message(chat_id, "Выберите кошелёк для пересоздания:", reply_markup=keyboard)
+            ], [{"text": t(chat_id, "back"), "callback_data": "wallet_menu"}]]}
+            send_message(chat_id, t(chat_id, "wallet_select_recreate"), reply_markup=keyboard)
         return
 
     if data.startswith("wallet_recreate_"):
@@ -1028,7 +1263,7 @@ def handle_wallet_callback(callback_id, chat_id, data):
         wallets = load_wallets()
         info = wallets.get(addr)
         if not info or info.get("owner") != chat_id:
-            send_message(chat_id, "Кошелёк не найден.")
+            send_message(chat_id, t(chat_id, "wallet_not_found_short"))
             return
         new_addr = generate_address()
         wallets[new_addr] = {
@@ -1041,28 +1276,22 @@ def handle_wallet_callback(callback_id, chat_id, data):
         }
         del wallets[addr]
         save_wallets(wallets)
-        send_message(chat_id, (
-            f"✅ Адрес пересоздан!\n\n"
-            f"Старый: {addr}\n"
-            f"Новый: {new_addr}\n"
-            f"Бот: @{info['username']}\n\n"
-            f"Отправка: /send {new_addr} СУММА"
-        ))
+        send_message(chat_id, t(chat_id, "wallet_recreated", old=addr, new=new_addr, bot=info["username"]))
         return
 
     if data == "wallet_delete":
         user_wallets = get_user_wallets(chat_id)
         if not user_wallets:
-            send_message(chat_id, "У вас нет кошельков.")
+            send_message(chat_id, t(chat_id, "no_wallets"))
             return
         if len(user_wallets) == 1:
-            send_message(chat_id, "Нельзя удалить единственный кошелёк.")
+            send_message(chat_id, t(chat_id, "wallet_cant_delete_one"))
             return
         keyboard = {"inline_keyboard": [[
             {"text": f"{a}", "callback_data": f"wallet_delete_{a}"}
             for a, _ in user_wallets
-        ], [{"text": "← Назад", "callback_data": "wallet_menu"}]]}
-        send_message(chat_id, "Выберите кошелёк для удаления:", reply_markup=keyboard)
+        ], [{"text": t(chat_id, "back"), "callback_data": "wallet_menu"}]]}
+        send_message(chat_id, t(chat_id, "wallet_select_delete"), reply_markup=keyboard)
         return
 
     if data.startswith("wallet_delete_"):
@@ -1070,47 +1299,37 @@ def handle_wallet_callback(callback_id, chat_id, data):
         wallets = load_wallets()
         info = wallets.get(addr)
         if not info or info.get("owner") != chat_id:
-            send_message(chat_id, "Кошелёк не найден.")
+            send_message(chat_id, t(chat_id, "wallet_not_found_short"))
             return
         del wallets[addr]
         save_wallets(wallets)
-        send_message(chat_id, f"🗑 Кошелёк {addr} удалён.")
+        send_message(chat_id, t(chat_id, "wallet_deleted", addr=addr))
         return
 
     if data == "wallet_buy":
         user_wallets = get_user_wallets(chat_id)
         if len(user_wallets) >= MAX_WALLETS:
-            send_message(chat_id, f"Лимит кошельков ({MAX_WALLETS}) достигнут.")
+            send_message(chat_id, t(chat_id, "wallet_limit_reached", max=MAX_WALLETS))
             return
         result = telegram("sendInvoice", {
             "chat_id": chat_id,
-            "title": f"Покупка кошелька ({WALLET_PRICE} Stars)",
-            "description": f"2-й кошелёк. Максимум {MAX_WALLETS} на пользователя.",
+            "title": t(chat_id, "invoice_buy_title", price=WALLET_PRICE),
+            "description": t(chat_id, "invoice_buy_desc", max=MAX_WALLETS),
             "payload": "wallet_buy",
             "currency": "XTR",
             "prices": [{"label": f"{WALLET_PRICE} Stars", "amount": WALLET_PRICE}],
         })
         if not isinstance(result, dict) or result.get("ok") is not True:
-            desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+            desc = result.get("description", "Error") if isinstance(result, dict) else "No response"
+            send_message(chat_id, t(chat_id, "invoice_failed", desc=desc))
         return
 
     if data == "wallet_nope":
-        send_message(chat_id, f"Лимит кошельков ({MAX_WALLETS}) достигнут.")
+        send_message(chat_id, t(chat_id, "wallet_limit_reached", max=MAX_WALLETS))
         return
 
     if data == "wallet_help":
-        send_message(chat_id, (
-            "💼 Управление кошельками\n\n"
-            f"Первый кошелёк — бесплатно\n"
-            f"Второй — {WALLET_PRICE} Stars\n"
-            f"Лимит: {MAX_WALLETS} кошелька\n\n"
-            "Команды:\n"
-            "  /wallet — это меню\n"
-            "  /start — создать кошелёк\n"
-            "  /my — показать кошелёк\n"
-            "  /send АДРЕС СУММА — оплата"
-        ))
+        send_message(chat_id, t(chat_id, "wallet_help_text", price=WALLET_PRICE, max=MAX_WALLETS))
         return
 
 
@@ -1134,8 +1353,10 @@ def handle_callback_query(callback):
     ban = is_banned(chat_id)
     if ban:
         reason = ban.get("reason", "")
-        reason_text = f"\nПричина: {reason}" if reason else ""
-        send_message(chat_id, f"Вы забанены.{reason_text}")
+        if reason:
+            send_message(chat_id, t(chat_id, "banned_reason", reason=reason))
+        else:
+            send_message(chat_id, t(chat_id, "banned"))
         return
 
     if data.startswith("wallet_"):
@@ -1145,29 +1366,28 @@ def handle_callback_query(callback):
     if data == "create_bot":
         answer_callback(callback_id)
         WAITING_FOR_TOKEN.add(chat_id)
-        send_message(chat_id, (
-            "Отправьте токен вашего бота.\n"
-            "Формат: 123456789:AA...\n\n"
-            "Получить токен можно у @BotFather -> /newbot"
-        ))
+        send_message(chat_id, t(chat_id, "token_prompt"))
+        return
+
+    if data.startswith("lang_"):
+        answer_callback(callback_id)
+        if data == "lang_ru":
+            set_lang(chat_id, "ru")
+            send_message(chat_id, t(chat_id, "lang_set"))
+        elif data == "lang_en":
+            set_lang(chat_id, "en")
+            send_message(chat_id, t(chat_id, "lang_set"))
+        elif data == "lang_toggle":
+            cur = get_lang(chat_id)
+            new = "en" if cur == "ru" else "ru"
+            set_lang(chat_id, new)
+            send_message(chat_id, t(chat_id, "lang_set"))
         return
 
     if data == "help":
         answer_callback(callback_id)
         is_admin = chat_id == ADMIN_ID
-        msg = (
-            "Помощь\n\n"
-            "Кошелёк:\n"
-            "  /start — создать кошелёк\n"
-            "  /wallet — меню кошельков\n"
-            "  /my — мой кошелёк\n\n"
-            "Оплата:\n"
-            "  /send АДРЕС СУММА — ссылка на оплату\n"
-            "  /pay 100 — оплата через бота\n"
-            "  @bot 10 — inline-счёт\n\n"
-            "Промокоды:\n"
-            "  /redeem КОД — активировать промокод"
-        )
+        msg = t(chat_id, "help_title") + "\n\n" + t(chat_id, "help_wallet") + "\n\n" + t(chat_id, "help_payment") + "\n\n" + t(chat_id, "help_promo")
         if is_admin:
             msg += (
                 "\n\nАдмин:\n"
@@ -1225,18 +1445,13 @@ def handle_successful_payment(message):
     if payload == "wallet_buy":
         add_pending_buy(chat_id)
         WAITING_FOR_TOKEN.add(chat_id)
-        send_message(chat_id, (
-            f"✅ Оплата {amount} Stars получена!\n\n"
-            f"Теперь отправьте токен бота для создания кошелька.\n"
-            f"Формат: 123456789:AA...\n\n"
-            f"Получить токен: @BotFather -> /newbot"
-        ))
+        send_message(chat_id, t(chat_id, "wallet_buy_paid", amount=amount))
         return
 
     if payload == "main_bot_payment":
-        send_message(chat_id, f"Оплата {amount} {currency} получена!")
+        send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
     else:
-        send_message(chat_id, f"Оплата {amount} {currency} получена!")
+        send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
 
 
 # ============================================================
@@ -1257,15 +1472,7 @@ def _create_send_link(chat_id, address, amount):
     name = wallet.get("name", "")
     display = f"{name} ({address})" if name else address
     link = f"https://t.me/{bot_username}?start={code}"
-    send_message(chat_id, (
-        f"Ссылка для оплаты создана!\n\n"
-        f"Кошелёк: {display}\n"
-        f"Бот: @{bot_username}\n"
-        f"Сумма: {amount} Stars\n\n"
-        f"Ссылка:\n{link}\n\n"
-        f"Отправьте её получателю для оплаты.\n"
-        f"Бот активен 5 минут для приёма оплаты."
-    ))
+    send_message(chat_id, t(chat_id, "send_link_created", display=display, bot=bot_username, amount=amount, link=link))
     if token:
         start_user_bot(address_hash(address), token, base_url)
         def _stop_after_timeout():
@@ -1296,45 +1503,37 @@ def handle_message(message):
     ban = is_banned(chat_id)
     if ban:
         reason = ban.get("reason", "")
-        reason_text = f"\nПричина: {reason}" if reason else ""
-        send_message(chat_id, f"Вы забанены.{reason_text}")
+        if reason:
+            send_message(chat_id, t(chat_id, "banned_reason", reason=reason))
+        else:
+            send_message(chat_id, t(chat_id, "banned"))
         return
 
     # Ждём новое имя кошелька (после подарка)
     if chat_id in WAITING_RENAME:
         if text == "/cancel":
             WAITING_RENAME.pop(chat_id, None)
-            send_message(chat_id, "Ок. Имя не изменено.")
+            send_message(chat_id, t(chat_id, "rename_cancel"))
             return
         if text == "/my" or text == "/start":
-            # Не сбрасываем — просто покажем кошелёк
             pass
         elif text.startswith("/"):
-            # Другие команды — не сбрасываем rename, обрабатываем ниже
             pass
         else:
             address = WAITING_RENAME.pop(chat_id)
             if address == "new":
                 WAITING_RENAME.pop(chat_id, None)
                 return
-            # Не даём записать токен как имя
             if re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", text):
-                send_message(chat_id, (
-                    "Это похоже на токен, а не имя.\n"
-                    "Введите имя для кошелька (или /cancel):"
-                ))
+                send_message(chat_id, t(chat_id, "token_looks"))
                 WAITING_RENAME[chat_id] = address
                 return
             wallets = load_wallets()
             if address in wallets:
-                wallets[address]["name"] = text.strip()
+                name = text.strip()
+                wallets[address]["name"] = name
                 save_wallets(wallets)
-                send_message(chat_id, (
-                    f"Имя кошелька изменено!\n\n"
-                    f"Адрес: {address}\n"
-                    f"Имя: {text.strip()}\n\n"
-                    f"/send {text.strip()} СУММА"
-                ))
+                send_message(chat_id, t(chat_id, "rename_done", address=address, name=name))
             return
 
     # Ждём токен (пропускаем команды)
@@ -1350,35 +1549,23 @@ def handle_message(message):
             WAITING_FOR_TOKEN.discard(chat_id)
             token = text.strip()
             if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{30,}", token):
-                send_message(chat_id, (
-                    "Неверный формат токена.\n"
-                    "Формат: 123456789:AA...\n\n"
-                    "Попробуйте снова: /start"
-                ))
+                send_message(chat_id, t(chat_id, "token_format"))
                 return
-            # Валидируем токен
             base_url, result = validate_token(token)
             if base_url is None:
-                send_message(chat_id, "Токен невалиден. Попробуйте снова: /start")
+                send_message(chat_id, t(chat_id, "token_invalid"))
                 return
             bot_info = result.get("result", {})
             bot_username = bot_info.get("username", "unknown")
 
-            # Проверяем лимит кошельков
             user_wallets = get_user_wallets(chat_id)
             is_buy = has_pending_buy(chat_id)
             if len(user_wallets) >= MAX_WALLETS and not is_buy:
-                send_message(chat_id, (
-                    f"Лимит кошельков ({MAX_WALLETS}) достигнут.\n\n"
-                    "Управление: /wallet"
-                ))
+                send_message(chat_id, t(chat_id, "wallet_limit", max=MAX_WALLETS))
                 WAITING_FOR_TOKEN.discard(chat_id)
                 return
             if len(user_wallets) >= 1 and not is_buy:
-                send_message(chat_id, (
-                    f"Первый кошелёк — бесплатно, второй — {WALLET_PRICE} Stars.\n\n"
-                    "Используйте /wallet → Купить"
-                ))
+                send_message(chat_id, t(chat_id, "wallet_second_paid", price=WALLET_PRICE))
                 WAITING_FOR_TOKEN.discard(chat_id)
                 return
 
@@ -1411,23 +1598,9 @@ def handle_message(message):
             # Если активирован подарок — просим имя
             if chat_id in WAITING_RENAME:
                 WAITING_RENAME[chat_id] = address
-                send_message(chat_id, (
-                    f"Кошелёк создан!\n\n"
-                    f"Адрес: {address}\n"
-                    f"Бот: @{bot_username}\n\n"
-                    f"Подарок: введите имя для кошелька\n"
-                    f"(или /cancel для пропуска):"
-                ))
+                send_message(chat_id, t(chat_id, "wallet_created_rename", address=address, bot=bot_username))
             else:
-                send_message(chat_id, (
-                    f"Кошелёк создан!\n\n"
-                    f"Адрес: {address}\n"
-                    f"Бот: @{bot_username}\n\n"
-                    f"Отправка средств:\n"
-                    f"/send {address} СУММА\n\n"
-                    f"Например:\n"
-                    f"/send {address} 100"
-                ))
+                send_message(chat_id, t(chat_id, "wallet_created", address=address, bot=bot_username))
             return
 
     # /start (возможно с параметром gift_XXX, pay_XXX)
@@ -1440,67 +1613,61 @@ def handle_message(message):
             if start_param.startswith("pay_"):
                 check = get_check(start_param)
                 if check is None:
-                    send_message(chat_id, "Ссылка недействительна.")
+                    send_message(chat_id, t(chat_id, "link_invalid"))
                     return
                 if check.get("paid"):
-                    send_message(chat_id, "Эта ссылка уже использована.")
+                    send_message(chat_id, t(chat_id, "link_used"))
                     return
                 amount = check["amount"]
                 wallet_addr = check.get("wallet", "")
                 wallets = load_wallets()
                 wallet = wallets.get(wallet_addr)
                 if not wallet:
-                    send_message(chat_id, "Кошелёк не найден.")
+                    send_message(chat_id, t(chat_id, "wallet_not_found_short"))
                     return
                 wallet_token = wallet.get("token", "")
                 wallet_base = wallet.get("base_url", API_BASE)
                 wallet_bot = wallet.get("username", "bot")
                 name = wallet.get("name", "")
                 display = f"{name} ({wallet_addr})" if name else wallet_addr
-                # Отправляем invoice через бота кошелька
                 result = user_bot_api(wallet_base, wallet_token, "sendInvoice", {
                     "chat_id": chat_id,
-                    "title": f"Оплата {amount} Stars",
-                    "description": f"Перевод на кошелёк {display}",
+                    "title": t(chat_id, "invoice_title", amount=amount),
+                    "description": t(chat_id, "invoice_desc", amount=amount),
                     "payload": start_param,
                     "currency": "XTR",
                     "prices": [{"label": f"{amount} Stars", "amount": amount}],
                 })
                 if not isinstance(result, dict) or result.get("ok") is not True:
-                    desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-                    send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+                    desc = result.get("description", "Error") if isinstance(result, dict) else "No response"
+                    send_message(chat_id, t(chat_id, "invoice_failed", desc=desc))
                 return
 
-            # Подарок — активация промокода
             if start_param.startswith("gift_"):
                 gift_info = use_gift(start_param, chat_id)
                 if not gift_info:
-                    send_message(chat_id, (
-                        "Ссылка недействительна или уже использована."
-                    ))
+                    send_message(chat_id, t(chat_id, "gift_invalid"))
                     return
                 item = gift_info.get("item", "")
                 amount = gift_info.get("amount", 0)
                 rename = gift_info.get("rename", False)
                 tg_gift_id = gift_info.get("gift_id", "")
 
-                # Отправляем реальный Telegram Gift если есть gift_id
                 gift_sent = False
                 if tg_gift_id:
                     gift_sent = send_tg_gift(BOT_TOKEN, chat_id, tg_gift_id)
 
-                # Формируем сообщение о подарке
-                gift_lines = ["🎁 Подарок активирован!\n"]
+                gift_lines = [t(chat_id, "gift_activated")]
                 if item:
                     cat = GIFTS_CATALOG.get(item, {})
                     title = cat.get("title", item)
-                    gift_lines.append(f"Предмет: {title}")
+                    gift_lines.append(t(chat_id, "gift_item", title=title))
                 if gift_sent:
-                    gift_lines.append("✅ Telegram Gift отправлен вам!")
+                    gift_lines.append(t(chat_id, "gift_tg_sent"))
                 elif tg_gift_id:
-                    gift_lines.append("⚠️ Не удалось отправить Gift")
+                    gift_lines.append(t(chat_id, "gift_tg_failed"))
                 if rename:
-                    gift_lines.append("✨ Бонус: смена имени кошелька")
+                    gift_lines.append(t(chat_id, "gift_rename_bonus"))
 
                 wallets = load_wallets()
                 user_addr = None
@@ -1512,14 +1679,14 @@ def handle_message(message):
                 if rename:
                     if user_addr:
                         WAITING_RENAME[chat_id] = user_addr
-                        gift_lines.append("\nВведите новое имя (или /cancel):")
+                        gift_lines.append(t(chat_id, "gift_rename_prompt"))
                     else:
                         WAITING_FOR_TOKEN.add(chat_id)
                         WAITING_RENAME[chat_id] = "new"
-                        gift_lines.append("\nОтправьте токен бота для создания кошелька.\nФормат: 123456789:AA...")
+                        gift_lines.append(t(chat_id, "promo_rename_prompt"))
                 else:
                     if not user_addr:
-                        gift_lines.append("\nСоздайте кошелёк: /start")
+                        gift_lines.append(t(chat_id, "gift_no_wallet"))
 
                 send_message(chat_id, "\n".join(gift_lines))
                 return
@@ -1530,25 +1697,29 @@ def handle_message(message):
             if info.get("owner") == chat_id:
                 name = info.get("name", "")
                 name_str = f" ({name})" if name else ""
-                send_message(chat_id, (
-                    f"Ваш кошелёк: {addr}{name_str}\n"
-                    f"Бот: @{info.get('username', '?')}\n\n"
-                    f"Отправка средств:\n"
-                    f"/send {addr} СУММА"
-                ))
+                send_message(chat_id, t(chat_id, "my_wallet", addr=addr, name=name_str, bot=info.get("username", "?")))
                 return
+
+        # Первый запуск — выбор языка
+        if get_lang(chat_id) == "ru" and not LANG_FILE.exists():
+            keyboard = {
+                "inline_keyboard": [[
+                    {"text": "🇷🇺 Русский", "callback_data": "lang_ru"},
+                    {"text": "🇬🇧 English", "callback_data": "lang_en"},
+                ]]
+            }
+            send_message(chat_id, t(chat_id, "lang_select"), reply_markup=keyboard)
+            return
 
         keyboard = {
             "inline_keyboard": [
-                [{"text": "Создать кошелёк", "callback_data": "create_bot"}],
-                [{"text": "Помощь", "callback_data": "help"}],
+                [{"text": t(chat_id, "start_create"), "callback_data": "create_bot"}],
+                [{"text": t(chat_id, "start_help"), "callback_data": "help"}],
+                [{"text": "🌐 " + ("English" if get_lang(chat_id) == "ru" else "Русский"),
+                  "callback_data": "lang_toggle"}],
             ]
         }
-        send_message(chat_id, (
-            "Привет!\n\n"
-            "Создайте кошелёк для приёма оплаты Stars.\n"
-            "Нажмите кнопку ниже и введите токен бота."
-        ), reply_markup=keyboard)
+        send_message(chat_id, t(chat_id, "start_greeting"), reply_markup=keyboard)
         return
 
     # /my — показать кошелёк
@@ -1558,19 +1729,25 @@ def handle_message(message):
             if info.get("owner") == chat_id:
                 name = info.get("name", "")
                 name_str = f" ({name})" if name else ""
-                send_message(chat_id, (
-                    f"Ваш кошелёк: {addr}{name_str}\n"
-                    f"Бот: @{info.get('username', '?')}\n\n"
-                    f"Отправка средств:\n"
-                    f"/send {addr} СУММА"
-                ))
+                send_message(chat_id, t(chat_id, "my_wallet", addr=addr, name=name_str, bot=info.get("username", "?")))
                 return
-        send_message(chat_id, "У вас нет кошелька. Создайте: /start")
+        send_message(chat_id, t(chat_id, "no_wallet_create"))
         return
 
     # /wallet — меню управления кошельками
     if text == "/wallet":
         show_wallet_menu(chat_id)
+        return
+
+    # /lang — сменить язык
+    if text == "/lang":
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "🇷🇺 Русский", "callback_data": "lang_ru"},
+                {"text": "🇬🇧 English", "callback_data": "lang_en"},
+            ]]
+        }
+        send_message(chat_id, t(chat_id, "lang_select"), reply_markup=keyboard)
         return
 
     # /redeem КОД — активировать промокод
@@ -1579,7 +1756,7 @@ def handle_message(message):
         pcode = match_redeem.group(1).upper()
         promo_info = use_promo(pcode, chat_id)
         if not promo_info:
-            send_message(chat_id, "Промокод недействителен или уже использован.")
+            send_message(chat_id, t(chat_id, "promo_invalid"))
             return
 
         item = promo_info.get("item", "")
@@ -1636,9 +1813,9 @@ def handle_message(message):
                 if SEND_ERROR_COUNT[chat_id] >= 2:
                     WAITING_SEND_AMOUNT.pop(chat_id, None)
                     SEND_ERROR_COUNT.pop(chat_id, None)
-                    send_message(chat_id, "Слишком много ошибок. Начните заново: /send АДРЕС СУММА")
+                    send_message(chat_id, t(chat_id, "send_too_many_errors"))
                 else:
-                    send_message(chat_id, "Введите число — сумму в Stars:")
+                    send_message(chat_id, t(chat_id, "send_amount_invalid"))
                 return
             amount = int(text)
             if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
@@ -1646,9 +1823,9 @@ def handle_message(message):
                 if SEND_ERROR_COUNT[chat_id] >= 2:
                     WAITING_SEND_AMOUNT.pop(chat_id, None)
                     SEND_ERROR_COUNT.pop(chat_id, None)
-                    send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT}. Начните заново: /send АДРЕС СУММА")
+                    send_message(chat_id, t(chat_id, "send_amount_range", min=MIN_AMOUNT, max=MAX_AMOUNT))
                 else:
-                    send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars. Попробуйте снова:")
+                    send_message(chat_id, t(chat_id, "send_amount_range_retry", min=MIN_AMOUNT, max=MAX_AMOUNT))
                 return
             # Успех — создаём ссылку
             info = WAITING_SEND_AMOUNT.pop(chat_id)
@@ -1672,18 +1849,18 @@ def handle_message(message):
                     address = addr
                     break
         if not wallet:
-            send_message(chat_id, f"Кошелёк {target} не найден.")
+            send_message(chat_id, t(chat_id, "wallet_not_found", target=target))
             return
         if amount_str:
             amount = int(amount_str)
             if amount < MIN_AMOUNT or amount > MAX_AMOUNT:
-                send_message(chat_id, f"Сумма от {MIN_AMOUNT} до {MAX_AMOUNT} Stars")
+                send_message(chat_id, t(chat_id, "send_amount_range_short", min=MIN_AMOUNT, max=MAX_AMOUNT))
                 return
             _create_send_link(chat_id, address, amount)
         else:
             WAITING_SEND_AMOUNT[chat_id] = {"address": address}
             SEND_ERROR_COUNT[chat_id] = 0
-            send_message(chat_id, "Введите сумму в Stars (число):")
+            send_message(chat_id, t(chat_id, "send_enter_amount"))
         return
 
     # /pay N (основной бот)
@@ -1691,22 +1868,22 @@ def handle_message(message):
     if match:
         amount = int(match.group(1))
         if amount <= 0:
-            send_message(chat_id, "Сумма должна быть больше 0")
+            send_message(chat_id, t(chat_id, "send_amount_zero"))
             return
         if amount > MAX_AMOUNT:
-            send_message(chat_id, f"Максимальная сумма — {MAX_AMOUNT} Stars")
+            send_message(chat_id, t(chat_id, "send_amount_max", max=MAX_AMOUNT))
             return
         result = telegram("sendInvoice", {
             "chat_id": chat_id,
-            "title": "Оплата Stars",
-            "description": f"Оплата на сумму {amount} Stars",
+            "title": t(chat_id, "invoice_title", amount=amount),
+            "description": t(chat_id, "invoice_desc", amount=amount),
             "payload": "main_bot_payment",
             "currency": "XTR",
             "prices": [{"label": f"{amount} Stars", "amount": amount}],
         })
         if not isinstance(result, dict) or result.get("ok") is not True:
-            desc = result.get("description", "Ошибка") if isinstance(result, dict) else "Нет ответа"
-            send_message(chat_id, f"Не удалось создать счёт.\n\n{desc}")
+            desc = result.get("description", "Error") if isinstance(result, dict) else "No response"
+            send_message(chat_id, t(chat_id, "invoice_failed", desc=desc))
         return
 
     # Админ-команды
@@ -2170,16 +2347,20 @@ def handle_inline_query_main(inline_query):
         query = ""
     query = query.strip()
 
+    user = inline_query.get("from") or {}
+    user_id = user.get("id", 0)
+    lang = get_lang(user_id) if user_id else "ru"
+
     if not query:
         telegram("answerInlineQuery", {
             "inline_query_id": query_id,
             "results": [{
                 "type": "article",
                 "id": "help",
-                "title": "Создать счёт на оплату",
-                "description": "Введите сумму, например: 10",
+                "title": t(user_id, "inline_help_title"),
+                "description": t(user_id, "inline_help_desc"),
                 "input_message_content": {
-                    "message_text": "Напишите сумму после имени бота.\n\nПример:\n@kise 10",
+                    "message_text": t(user_id, "inline_help"),
                 },
             }],
             "cache_time": 1,
@@ -2194,10 +2375,10 @@ def handle_inline_query_main(inline_query):
             "results": [{
                 "type": "article",
                 "id": "invalid",
-                "title": "Неверная сумма",
-                "description": "Например: @kise 10",
+                "title": t(user_id, "inline_invalid_title"),
+                "description": t(user_id, "inline_invalid_desc"),
                 "input_message_content": {
-                    "message_text": "Неверная сумма.\n\nПример:\n@kise 10",
+                    "message_text": t(user_id, "inline_invalid_text"),
                 },
             }],
             "cache_time": 1,
@@ -2212,9 +2393,9 @@ def handle_inline_query_main(inline_query):
             "results": [{
                 "type": "article",
                 "id": "err_min",
-                "title": "Сумма слишком маленькая",
-                "description": f"Минимум — {MIN_AMOUNT} Stars",
-                "input_message_content": {"message_text": f"Минимум — {MIN_AMOUNT} Stars"},
+                "title": t(user_id, "inline_min_title"),
+                "description": t(user_id, "inline_min_desc", min=MIN_AMOUNT),
+                "input_message_content": {"message_text": t(user_id, "inline_min_desc", min=MIN_AMOUNT)},
             }],
             "cache_time": 1,
             "is_personal": True,
@@ -2226,17 +2407,15 @@ def handle_inline_query_main(inline_query):
             "results": [{
                 "type": "article",
                 "id": "err_max",
-                "title": "Сумма слишком большая",
-                "description": f"Максимум — {MAX_AMOUNT} Stars",
-                "input_message_content": {"message_text": f"Максимум — {MAX_AMOUNT} Stars"},
+                "title": t(user_id, "inline_max_title"),
+                "description": t(user_id, "inline_max_desc", max=MAX_AMOUNT),
+                "input_message_content": {"message_text": t(user_id, "inline_max_desc", max=MAX_AMOUNT)},
             }],
             "cache_time": 1,
             "is_personal": True,
         })
         return
 
-    user = inline_query.get("from") or {}
-    user_id = user.get("id", 0)
     user_wallets = get_user_wallets(user_id) if user_id else []
 
     if not user_wallets:
@@ -2245,10 +2424,10 @@ def handle_inline_query_main(inline_query):
             "results": [{
                 "type": "article",
                 "id": "no_wallet",
-                "title": "У вас нет кошелька",
-                "description": "Создайте кошелёк: /start у @kise",
+                "title": t(user_id, "inline_no_wallet_title"),
+                "description": t(user_id, "inline_no_wallet_desc"),
                 "input_message_content": {
-                    "message_text": "У вас нет кошелька.\n\nСоздайте: /start у @kise",
+                    "message_text": t(user_id, "inline_no_wallet_text"),
                 },
             }],
             "cache_time": 30,
@@ -2278,14 +2457,14 @@ def handle_inline_query_main(inline_query):
             results.append({
                 "type": "article",
                 "id": f"wallet_{addr}",
-                "title": f"Счёт на {amount} Stars → @{bot_username}",
-                "description": f"Кошелёк: {display}",
+                "title": t(user_id, "inline_article_title", amount=amount) + f" → @{bot_username}",
+                "description": f"{display}",
                 "input_message_content": {
-                    "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\nКошелёк: {display}\n\nНажмите кнопку для оплаты:",
+                    "message_text": t(user_id, "inline_article_text", amount=amount, display=display),
                 },
                 "reply_markup": {
                     "inline_keyboard": [[
-                        {"text": f"Оплатить {amount} Stars", "url": url},
+                        {"text": t(user_id, "inline_pay_btn", amount=amount), "url": url},
                     ]],
                 },
             })
@@ -2317,14 +2496,14 @@ def handle_inline_query_main(inline_query):
     result = {
         "type": "article",
         "id": secrets.token_hex(8),
-        "title": f"Счёт на {amount} Stars",
-        "description": f"Оплата на @{bot_username}",
+        "title": t(user_id, "inline_article_title", amount=amount),
+        "description": t(user_id, "inline_article_desc", bot=bot_username),
         "input_message_content": {
-            "message_text": f"💰 Счёт на оплату\n\nСумма: {amount} Stars\nКошелёк: {display}\n\nНажмите кнопку для оплаты:",
+            "message_text": t(user_id, "inline_article_text", amount=amount, display=display),
         },
         "reply_markup": {
             "inline_keyboard": [[
-                {"text": f"Оплатить {amount} Stars", "url": url},
+                {"text": t(user_id, "inline_pay_btn", amount=amount), "url": url},
             ]],
         },
     }
