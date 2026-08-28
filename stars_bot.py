@@ -805,11 +805,6 @@ def user_bot_handle_message(base_url, token, message):
             if check and not check.get("paid"):
                 mark_check_paid(code, chat_id)
                 wallet_addr = check.get("wallet", "")
-                from_id = check.get("from", 0)
-                user_bot_api(base_url, token, "sendMessage", {
-                    "chat_id": chat_id,
-                    "text": t(chat_id, "payment_received_wallet", amount=amount),
-                })
                 wallets = load_wallets()
                 wallet_info = wallets.get(wallet_addr, {})
                 owner_id = wallet_info.get("owner", 0)
@@ -818,11 +813,6 @@ def user_bot_handle_message(base_url, token, message):
                         "chat_id": owner_id,
                         "text": t(owner_id, "payment_received_wallet", amount=amount),
                     })
-            else:
-                user_bot_api(base_url, token, "sendMessage", {
-                    "chat_id": chat_id,
-                    "text": t(chat_id, "payment_received_wallet", amount=amount),
-                })
         else:
             user_bot_api(base_url, token, "sendMessage", {
                 "chat_id": chat_id,
@@ -1568,6 +1558,11 @@ def handle_successful_payment(message):
             wallet_addr = check.get("wallet", "")
         send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
         send_receipt_pdf(chat_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
+        wallets = load_wallets()
+        wallet_info = wallets.get(wallet_addr, {})
+        owner_id = wallet_info.get("owner", 0)
+        if owner_id and owner_id != chat_id:
+            send_receipt_pdf(owner_id, amount, wallet_addr=wallet_addr, payer_id=chat_id, charge_id=charge_id, fee=0)
         return
 
     send_message(chat_id, t(chat_id, "payment_received", amount=amount, currency=currency))
