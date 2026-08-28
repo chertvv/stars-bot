@@ -124,10 +124,10 @@ def save_wallets(wallets: dict) -> None:
 
 
 def generate_address() -> str:
-    """Генерирует уникальный 8-значный адрес (буквы + цифры)."""
+    """Генерирует уникальный адрес формата ks-XXXXX (5 символов)."""
     chars = string.ascii_lowercase + string.digits
     while True:
-        addr = "".join(secrets.choice(chars) for _ in range(8))
+        addr = "ks-" + "".join(secrets.choice(chars) for _ in range(5))
         wallets = load_wallets()
         if addr not in wallets:
             return addr
