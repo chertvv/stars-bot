@@ -1489,7 +1489,7 @@ def generate_receipt_pdf(
     elements.append(table)
     elements.append(Spacer(1, 8 * mm))
 
-    footer_text = "Stars Bot — мгновенные переводы" if is_ru else "Stars Bot — instant transfers"
+    footer_text = "kise pay — мгновенные переводы" if is_ru else "kise pay — instant transfers"
     footer_style = ParagraphStyle("Footer", parent=normal_style, fontSize=9,
                                    textColor=colors.HexColor("#999999"), alignment=TA_CENTER)
     elements.append(Paragraph(footer_text, footer_style))
