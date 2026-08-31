@@ -26,8 +26,7 @@ import requests
 
 BOT_TOKEN = os.environ.get(
     "BOT_TOKEN",
-    "600000000132:bM552OzEgkTC6qbqkhGQpZBQTdYs9V2GcrBxqzlQS54",
-)
+    
 API_BASE = os.environ.get("API_BASE", "https://dev-angel-7553.dev")
 API = f"{API_BASE}/bot{BOT_TOKEN}"
 
